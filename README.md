@@ -1,4 +1,4 @@
-# Animatic
+# Mushy Edit
 
 Storyboard breakdown → animatic playback → mp4 / review viewer, plus the
 Google-Sheet time/task-estimation export. Vite + vanilla JS, deployed on Vercel.
@@ -38,7 +38,7 @@ From this folder:
 ```bash
 git init
 git add .
-git commit -m "Animatic step 1: scaffold + timeline + isolation headers"
+git commit -m "Mushy Edit step 1: scaffold + timeline + isolation headers"
 ```
 
 Create an empty repo on GitHub (no README/gitignore — this folder has them),
@@ -46,13 +46,13 @@ then:
 
 ```bash
 git branch -M main
-git remote add origin https://github.com/<you>/animatic.git
+git remote add origin https://github.com/<you>/mushy-edit.git
 git push -u origin main
 ```
 
 ### 2. Import into Vercel
 
-1. vercel.com → **Add New… → Project** → import the `animatic` repo.
+1. vercel.com → **Add New… → Project** → import the `mushy-edit` repo.
 2. Framework preset: **Vite** (auto-detected). Build command `npm run build`,
    output dir `dist` — both default, leave them.
 3. **Deploy.** First build takes ~1 min.
