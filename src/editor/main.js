@@ -1,6 +1,6 @@
 import '../style.css';
 import {
-  project as P, computeShots, timeline, resolveAt, autoEstimate, rebalance,
+  project as P, computeShots, timeline, resolveAt, autoEstimate, rebalance, markRebalanceSettled,
   retimeBoard, retimeGroup, offsetBoard, offsetGroup, boardDur, setBoardDur, enabledFlat, falloffWeight,
   getAnnos, setAnnos, hasAnnos, getBoardFit, setBoardFit, fitRect,
   isShotStart, forceCut, mergeUp, fmtClock,
@@ -13,7 +13,8 @@ import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture } from '../core/history.js';
 import { APPS_SCRIPT } from '../io/appsScript.js';
-import { openAssetWindow, openPreview, exportBreakdownJSON, setRefresh, closeModal } from './assets.js';
+import { openAssetWindow, openPreview, exportBreakdownJSON, setRefresh, closeModal, modal } from './assets.js';
+import { presetsForScope, downscaleFrame, replaceFrames, refreshDiffsAround } from '../core/imageOps.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
 
@@ -68,6 +69,7 @@ async function openWork(file) {
 function afterLoad(auto) {
   clearHistory(); pps = null; selected.clear(); imgCache.clear(); previewFi = -1;
   if (auto && P.boardDur.size === 0) autoEstimate(P); // seed a rough fit-to-spot at start
+  markRebalanceSettled(P); // fresh baseline: next rebalance respects pins unless spot is edited first
   onLoaded();
 }
 async function saveWork() {
@@ -94,6 +96,7 @@ function onLoaded() {
   gm.options[1].textContent = P.hasNamePattern ? 'filename' : 'filename (none)';
   $('saveBtn').disabled = false;
   $('assetsBtn').disabled = false;
+  $('imagesBtn').disabled = false;
   $('exportBtn').disabled = false;
   transport.mountAudio(); syncAudioUI(); render(); layoutPreview();
 }
@@ -343,6 +346,83 @@ function nudgeSlipSec(d) { const a = P.audio; if (!a) return; mutate(() => { a.o
 function setSyncToPlayhead() { const a = P.audio; if (!a) return; mutate(() => { a.offsetSec = transport.sec; }); drawSlipReadout(); layoutAudioClip(); transport.seek(transport.sec); refreshUndoButtons(); toast('Audio start set to playhead'); }
 function removeAudio() { if (!P.audio) return; if (P.audio.url && P.audio.url.startsWith('blob:')) { try { URL.revokeObjectURL(P.audio.url); } catch {} } P.audio = null; transport.mountAudio(); layoutAudioClip(); syncAudioUI(); toast('Audio removed'); }
 
+// ---------- image resolution management (downscale / replace) ----------
+// Both mutate frame.full/url directly and are NOT undo-able — heavy blobs are
+// deliberately excluded from the undo snapshot, so there's nothing to restore
+// except by re-importing the original files.
+function imageScope() {
+  const fis = selected.size ? [...selected].sort((a, b) => a - b) : P.frames.map((_, i) => i);
+  return { fis, frames: fis.map((fi) => P.frames[fi]) };
+}
+
+function openDownscaleModal() {
+  const { fis, frames } = imageScope();
+  if (!frames.length) return;
+  const { mode, options } = presetsForScope(frames);
+  modal('Downscale images', (body) => {
+    body.innerHTML = '';
+    const scopeLine = document.createElement('div'); scopeLine.className = 'asset-empty';
+    scopeLine.textContent = selected.size ? `Downscaling ${frames.length} selected board(s).` : `Downscaling all ${frames.length} boards.`;
+    body.appendChild(scopeLine);
+    const warn = document.createElement('div'); warn.className = 'asset-empty'; warn.style.color = 'var(--cut)';
+    warn.textContent = "This replaces the stored resolution in place — it can't be undone (no undo; only re-importing the original files brings it back).";
+    body.appendChild(warn);
+
+    const apply = async (targetsOf) => {
+      if (!confirm("Downscale now? This can't be undone.")) return;
+      closeModal(false);
+      try {
+        overlay('Downscaling…');
+        let done = 0;
+        for (const f of frames) {
+          const [tw, th] = targetsOf(f);
+          await downscaleFrame(f, tw, th);
+          done++; overlay(`Downscaling… ${done}/${frames.length}`);
+        }
+      } finally { overlay(false); }
+      fis.forEach((fi) => imgCache.delete(fi));
+      if (previewFi >= 0 && fis.includes(previewFi)) drawPreview(previewFi);
+      toast(`Downscaled ${frames.length} board(s)`);
+      render();
+    };
+
+    const grid = document.createElement('div'); grid.className = 'preset-grid';
+    options.forEach((p) => {
+      const b = document.createElement('button'); b.className = 'btn ghost sm';
+      b.textContent = mode === 'exact' ? `${p.label} — ${p.w}×${p.h}` : p.label;
+      b.onclick = mode === 'exact' ? () => apply(() => [p.w, p.h]) : () => apply((f) => [f.w * p.pct, f.h * p.pct]);
+      grid.appendChild(b);
+    });
+    body.appendChild(grid);
+
+    const customRow = document.createElement('div'); customRow.className = 'tp-row';
+    const inp = document.createElement('input'); inp.type = 'number'; inp.min = '50'; inp.placeholder = 'custom long edge, px';
+    const go = document.createElement('button'); go.className = 'btn ghost sm'; go.textContent = 'Apply custom';
+    go.onclick = () => {
+      const target = Math.max(50, +inp.value || 0); if (!target) return;
+      apply((f) => (f.w >= f.h ? [target, Math.round((target * f.h) / f.w)] : [Math.round((target * f.w) / f.h), target]));
+    };
+    customRow.append(inp, go);
+    body.appendChild(customRow);
+  });
+}
+
+async function runReplace(files) {
+  const { frames } = imageScope();
+  overlay('Replacing images…');
+  let result;
+  try { result = await replaceFrames(frames, files); }
+  finally { overlay(false); }
+  const fis = result.matched.map((f) => P.frames.indexOf(f));
+  if (fis.length) {
+    await refreshDiffsAround(P, fis);
+    fis.forEach((fi) => imgCache.delete(fi));
+    if (previewFi >= 0 && fis.includes(previewFi)) drawPreview(previewFi);
+    render();
+  }
+  toast(`Replaced ${result.matched.length} board(s)` + (result.unmatched.length ? ` — no match for: ${result.unmatched.join(', ')}` : ''));
+}
+
 // ---------- utils ----------
 function overlay(msg) { const o = $('overlay'); if (msg === false) { o.classList.add('hidden'); return; } o.querySelector('span').textContent = msg; o.classList.remove('hidden'); }
 let toastT; function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2000); }
@@ -392,30 +472,36 @@ function wirePlayheadAndRuler() {
   grab.addEventListener('pointermove', (e) => { if (dragging) scrubTo(e.clientX); });
   grab.addEventListener('pointerup', (e) => { dragging = false; grab.releasePointerCapture?.(e.pointerId); });
 
-  const ruler = $('tlRuler');
-  ruler.addEventListener('pointerdown', (e) => {
+  // Marquee/seek surface = the whole timeline background (ruler strip AND the
+  // empty area below the board/audio rows) — a click-drag anywhere in the empty
+  // space rectangle-selects; a plain click scrubs the playhead, same as the ruler.
+  // Tiles/audio-clip/playhead-grab own their own pointerdown handling, so bail if
+  // the event landed on one of those.
+  const sc = $('timeline');
+  sc.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.slot, .audio-clip, .mk, .ph-grab')) return;
     clearMarquee();
-    const sc = $('timeline'); marqX0 = e.clientX - sc.getBoundingClientRect().left + sc.scrollLeft;
+    marqX0 = e.clientX - sc.getBoundingClientRect().left + sc.scrollLeft;
     marqEl = document.createElement('div'); marqEl.className = 'marquee'; marqEl.style.left = marqX0 + 'px'; marqEl.style.width = '0px';
-    $('tlInner').appendChild(marqEl); ruler.setPointerCapture(e.pointerId);
+    $('tlInner').appendChild(marqEl); sc.setPointerCapture(e.pointerId);
   });
-  ruler.addEventListener('pointermove', (e) => {
+  sc.addEventListener('pointermove', (e) => {
     if (!marqEl) return;
-    const sc = $('timeline'); const x = e.clientX - sc.getBoundingClientRect().left + sc.scrollLeft;
+    const x = e.clientX - sc.getBoundingClientRect().left + sc.scrollLeft;
     marqEl.style.left = Math.min(marqX0, x) + 'px'; marqEl.style.width = Math.abs(x - marqX0) + 'px';
   });
   const finishMarquee = (e) => {
     if (!marqEl) return;
-    const sc = $('timeline'); const x = (e && e.clientX != null) ? e.clientX - sc.getBoundingClientRect().left + sc.scrollLeft : marqX0;
+    const x = (e && e.clientX != null) ? e.clientX - sc.getBoundingClientRect().left + sc.scrollLeft : marqX0;
     const a = Math.min(marqX0, x) / pps, b = Math.max(marqX0, x) / pps;
     clearMarquee();
     if (Math.abs(b - a) < 0.02) { transport.pause(); transport.seek(Math.round(a * P.fps) / P.fps); return; }
     const sel = new Set(); timeline(P).boards.forEach((bd) => { if (bd.startSec + bd.len > a && bd.startSec < b) sel.add(bd.fi); });
     if (sel.size) { selected = sel; cur = [...sel][0]; render(); toast(`${sel.size} selected`); }
   };
-  ruler.addEventListener('pointerup', finishMarquee);
-  ruler.addEventListener('pointercancel', clearMarquee);
-  ruler.addEventListener('lostpointercapture', () => { if (marqEl) clearMarquee(); });
+  sc.addEventListener('pointerup', finishMarquee);
+  sc.addEventListener('pointercancel', clearMarquee);
+  sc.addEventListener('lostpointercapture', () => { if (marqEl) clearMarquee(); });
   window.addEventListener('blur', clearMarquee);
 }
 
@@ -451,8 +537,11 @@ function wire() {
     catch { const ta = document.createElement('textarea'); ta.value = APPS_SCRIPT; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Apps Script copied'); }
   };
   $('assetsBtn').onclick = () => openAssetWindow();
-  $('exportBtn').onclick = (e) => { e.stopPropagation(); $('exportMenu').classList.toggle('hidden'); };
-  document.addEventListener('click', (e) => { if (!e.target.closest('#exportBtn, #exportMenu')) $('exportMenu').classList.add('hidden'); });
+  $('imagesBtn').onclick = (e) => { e.stopPropagation(); $('imagesMenu').classList.toggle('hidden'); };
+  $('mDownscale').onclick = () => { $('imagesMenu').classList.add('hidden'); openDownscaleModal(); };
+  $('mReplace').onclick = () => { $('imagesMenu').classList.add('hidden'); $('replaceInput').click(); };
+  $('replaceInput').onchange = (e) => { const files = [...e.target.files]; e.target.value = ''; if (files.length) runReplace(files); };
+  document.addEventListener('click', (e) => { if (!e.target.closest('#exportBtn, #exportMenu')) $('exportMenu').classList.add('hidden'); if (!e.target.closest('#imagesBtn, #imagesMenu')) $('imagesMenu').classList.add('hidden'); });
   $('mPreview').onclick = () => { $('exportMenu').classList.add('hidden'); openPreview(); };
   $('mJson').onclick = () => { $('exportMenu').classList.add('hidden'); exportBreakdownJSON(); toast('Breakdown JSON downloaded'); };
   $('mCopyGs').onclick = () => { $('exportMenu').classList.add('hidden'); copyGs(); };
@@ -464,8 +553,8 @@ function wire() {
     try { overlay('Building viewer…'); await exportViewer(); toast('Viewer JSON exported — open in view.html'); }
     catch (e) { console.error(e); toast('Viewer export failed'); } finally { overlay(false); }
   };
-  $('autoBtn').onclick = () => { mutate(() => { const r = autoEstimate(P); toast(`Estimated ${r.filled} boards → ${fmtClock(r.total)}`); }); render(); };
-  $('rebalBtn').onclick = () => { mutate(() => { const r = rebalance(P); toast(`Rebalanced → ${fmtClock(r.total)}`); }); render(); };
+  $('autoBtn').onclick = () => { mutate(() => { const r = autoEstimate(P); markRebalanceSettled(P); toast(`Estimated ${r.filled} boards → ${fmtClock(r.total)}`); }); render(); };
+  $('rebalBtn').onclick = () => { mutate(() => { const r = rebalance(P); toast(r.mode === 'whole' ? `Rebalanced whole edit (new target) → ${fmtClock(r.total)}` : `Rebalanced (pins locked) → ${fmtClock(r.total)}`); }); render(); };
   $('cutBtn').onclick = toggleCut;
   $('fitMode').onchange = (e) => { P.fitMode = e.target.value; if (previewFi >= 0) drawPreview(previewFi); refreshAnno(); toast('Fit: ' + e.target.value); };
   const runMp4 = async (maxW) => {

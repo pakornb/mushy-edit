@@ -77,7 +77,7 @@ export async function exportBreakdownJSON() {
 }
 
 // ---------- modal shell ----------
-function modal(title, bodyBuilder, wide, onClose) {
+export function modal(title, bodyBuilder, wide, onClose) {
   closeModal(false);
   const root = document.getElementById('modalRoot');
   const back = document.createElement('div'); back.className = 'modal-back'; back.id = 'activeModal';

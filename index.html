@@ -40,6 +40,13 @@
     <button class="btn ghost sm" id="saveBtn" disabled>Save</button>
     <button class="btn ghost sm" id="assetsBtn" disabled title="asset tracker">Assets</button>
     <div class="menu-wrap">
+      <button class="btn ghost sm" id="imagesBtn" disabled title="downscale or replace source images">Images ▾</button>
+      <div class="menu hidden" id="imagesMenu">
+        <button id="mDownscale">Downscale…</button>
+        <button id="mReplace">Replace…</button>
+      </div>
+    </div>
+    <div class="menu-wrap">
       <button class="btn ghost sm" id="exportBtn" disabled title="sheet preview / export">Export ▾</button>
       <div class="menu hidden" id="exportMenu">
         <button id="mMp4">Export mp4 — final…</button>
@@ -189,6 +196,7 @@
   <input type="file" id="zipInput" accept=".zip,application/zip" />
   <input type="file" id="workInput" accept=".json,application/json" />
   <input type="file" id="audioInput" accept="audio/*" />
+  <input type="file" id="replaceInput" multiple accept="image/*" />
 
   <script type="module" src="/src/editor/main.js"></script>
 </body>

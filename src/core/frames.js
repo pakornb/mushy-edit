@@ -38,9 +38,7 @@ async function ingest(items, source, firstName, zipName, preserve, onProgress) {
   p.source = source;
   if (!preserve) p.baseName = deriveBaseName(source, firstName, zipName);
 
-  const tiny = document.createElement('canvas');
-  tiny.width = TINY_W; tiny.height = TINY_H;
-  const tctx = tiny.getContext('2d', { willReadFrequently: true });
+  const tctx = makeTinyCtx();
   let maxW = 0, maxH = 0;
 
   for (let i = 0; i < items.length; i++) {
@@ -51,28 +49,14 @@ async function ingest(items, source, firstName, zipName, preserve, onProgress) {
     if (img.naturalWidth > maxW) maxW = img.naturalWidth;
     if (img.naturalHeight > maxH) maxH = img.naturalHeight;
 
-    const thumb = document.createElement('canvas');
-    thumb.width = THUMB_W; thumb.height = THUMB_H;
-    drawCover(thumb.getContext('2d'), img, THUMB_W, THUMB_H);
+    const thumb = makeThumb(img);
+    const luma = computeLuma(tctx, img);
 
-    tctx.drawImage(img, 0, 0, TINY_W, TINY_H);
-    const px = tctx.getImageData(0, 0, TINY_W, TINY_H).data;
-    const luma = new Uint8ClampedArray(TINY_W * TINY_H);
-    for (let s = 0, q = 0; s < px.length; s += 4, q++) {
-      luma[q] = (px[s] * 0.299 + px[s + 1] * 0.587 + px[s + 2] * 0.114) | 0;
-    }
-
-    p.frames.push({ index: p.frames.length, name, url, thumb, full: blob, luma });
+    p.frames.push({ index: p.frames.length, name, url, thumb, full: blob, luma, w: img.naturalWidth, h: img.naturalHeight });
     if (onProgress && i % 4 === 0) onProgress(i + 1, items.length);
   }
 
-  p.diffs = p.frames.map((f, i) => {
-    if (i === 0) return 0;
-    const a = p.frames[i - 1].luma, b = f.luma;
-    let sum = 0;
-    for (let k = 0; k < a.length; k++) sum += Math.abs(a[k] - b[k]);
-    return sum / a.length / 2.55;
-  });
+  p.diffs = p.frames.map((f, i) => (i === 0 ? 0 : diffLuma(p.frames[i - 1].luma, f.luma)));
 
   p.frameKeys = p.frames.map((f) => shotKeyOf(f.name));
   if (!preserve || !p.resW) { p.resW = maxW || 1920; p.resH = maxH || 1080; }
@@ -95,8 +79,32 @@ export function loadImage(url) {
   });
 }
 
-function drawCover(ctx, img, w, h) {
+export function drawCover(ctx, img, w, h) {
   const r = Math.max(w / img.width, h / img.height);
   const dw = img.width * r, dh = img.height * r;
   ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
+// downsampled per-pixel luma, used for frame-to-frame diff (scene-cut detection)
+export function computeLuma(tctx, img) {
+  tctx.clearRect(0, 0, TINY_W, TINY_H);
+  drawCover(tctx, img, TINY_W, TINY_H);
+  const px = tctx.getImageData(0, 0, TINY_W, TINY_H).data;
+  const luma = new Uint8ClampedArray(TINY_W * TINY_H);
+  for (let s = 0, q = 0; s < px.length; s += 4, q++) luma[q] = (px[s] * 0.299 + px[s + 1] * 0.587 + px[s + 2] * 0.114) | 0;
+  return luma;
+}
+export function diffLuma(a, b) {
+  let sum = 0;
+  for (let k = 0; k < a.length; k++) sum += Math.abs(a[k] - b[k]);
+  return sum / a.length / 2.55;
+}
+export function makeTinyCtx() {
+  const c = document.createElement('canvas'); c.width = TINY_W; c.height = TINY_H;
+  return c.getContext('2d', { willReadFrequently: true });
+}
+export function makeThumb(img) {
+  const thumb = document.createElement('canvas'); thumb.width = THUMB_W; thumb.height = THUMB_H;
+  drawCover(thumb.getContext('2d'), img, THUMB_W, THUMB_H);
+  return thumb;
 }

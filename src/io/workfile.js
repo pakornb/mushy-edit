@@ -1,8 +1,6 @@
 import { project as P, computeShots } from '../core/model.js';
 import { blobToBase64, base64ToBlob, download } from './base64.js';
-import { loadImage } from '../core/frames.js';
-
-const THUMB_W = 152, THUMB_H = 88;
+import { loadImage, makeThumb } from '../core/frames.js';
 
 // Serialize the whole editable project (full-res boards + audio + all state).
 export async function saveWorkFile(onProgress) {
@@ -30,7 +28,7 @@ export async function saveWorkFile(onProgress) {
     baseName: P.baseName, resW: P.resW, resH: P.resH,
     fps: P.fps, threshold: P.threshold, groupMode: P.groupMode,
     hasNamePattern: P.hasNamePattern, lenUnit: P.lenUnit, spotSeconds: P.spotSeconds,
-    falloffReach: P.falloffReach, falloffCurve: P.falloffCurve,
+    falloffReach: P.falloffReach, falloffCurve: P.falloffCurve, lastRebalanceSpot: P.lastRebalanceSpot,
     shotTasks: P.shotTasks, assetTasks: P.assetTasks, assetCats: P.assetCats, assets: P.assets,
     frameKeys: P.frameKeys,
     diffs: P.diffs.map((d) => Math.round(d * 100) / 100),
@@ -67,6 +65,7 @@ export async function openWorkFile(file, onProgress) {
   P.spotSeconds = doc.spotSeconds || 30;
   P.falloffReach = doc.falloffReach || 3;
   P.falloffCurve = doc.falloffCurve || 'smooth';
+  P.lastRebalanceSpot = doc.lastRebalanceSpot ?? P.spotSeconds;
   P.shotTasks = doc.shotTasks || doc.stages || ['previs', 'anim', 'light', 'comp'];
   P.assetTasks = doc.assetTasks || ['model', 'lookdev', 'rig'];
   P.assetCats = doc.assetCats || ['character', 'set', 'prop'];
@@ -101,14 +100,8 @@ export async function openWorkFile(file, onProgress) {
     const blob = base64ToBlob(fr.data, fr.type || 'image/png');
     const url = URL.createObjectURL(blob);
     const img = await loadImage(url).catch(() => null);
-    const thumb = document.createElement('canvas');
-    thumb.width = THUMB_W; thumb.height = THUMB_H;
-    if (img) {
-      const r = Math.max(THUMB_W / img.width, THUMB_H / img.height);
-      const dw = img.width * r, dh = img.height * r;
-      thumb.getContext('2d').drawImage(img, (THUMB_W - dw) / 2, (THUMB_H - dh) / 2, dw, dh);
-    }
-    P.frames.push({ index: fr.index ?? i, name: fr.name, url, thumb, full: blob });
+    const thumb = img ? makeThumb(img) : document.createElement('canvas');
+    P.frames.push({ index: fr.index ?? i, name: fr.name, url, thumb, full: blob, w: img?.naturalWidth || 0, h: img?.naturalHeight || 0 });
     if (onProgress && i % 3 === 0) onProgress(i + 1, list.length, 'opening');
   }
 

@@ -23,6 +23,7 @@ export const project = {
   boardFit: new Map(),    // filename -> fit override
   falloffReach: 3,        // base falloff reach in boards (global; Shift doubles it)
   falloffCurve: 'smooth', // 'linear' | 'easeIn' | 'easeOut' | 'smooth'
+  lastRebalanceSpot: null,// spotSeconds value as of the last rebalance/load; drives rebalance's pin-override mode
   shotTasks: ['previs', 'anim', 'light', 'comp'], // global shot task columns
   assetTasks: ['model', 'lookdev', 'rig'],        // global asset task columns
   assetCats: ['character', 'set', 'prop'],        // asset categories
@@ -220,17 +221,35 @@ export function autoEstimate(p = project) {
   return { filled: free.length, total, over: total - p.spotSeconds };
 }
 
-// Rebalance: scale all UNPINNED boards so the total equals the spot length.
+// Rebalance has two modes, chosen automatically:
+// - target UNCHANGED since the last rebalance/load: pins stay hard-locked (today's
+//   behavior) — only unpinned boards absorb the difference to hit the spot exactly.
+// - target CHANGED (spotSeconds edited since last rebalance): scale the WHOLE edit,
+//   pins included, by one uniform factor so every board's relative share of the
+//   total is preserved while the edit stretches/shrinks to the new length.
 export function rebalance(p = project) {
-  const flat = enabledFlat(p);
-  const pinnedTime = flat.filter((fi) => isPinned(p, fi)).reduce((s, fi) => s + boardDur(p, fi), 0);
-  const free = flat.filter((fi) => !isPinned(p, fi));
-  const freeTotal = free.reduce((s, fi) => s + boardDur(p, fi), 0) || 1;
-  const target = Math.max(0, p.spotSeconds - pinnedTime);
-  const factor = target / freeTotal;
-  free.forEach((fi) => setBoardDur(p, fi, boardDur(p, fi) * factor));
-  return { total: totalSec(p), over: totalSec(p) - p.spotSeconds };
+  const targetChanged = p.lastRebalanceSpot == null || Math.abs(p.lastRebalanceSpot - p.spotSeconds) > 1e-6;
+  if (targetChanged) {
+    const flat = enabledFlat(p);
+    const cur = totalSec(p) || 1;
+    const factor = Math.max(0, p.spotSeconds) / cur;
+    flat.forEach((fi) => setBoardDur(p, fi, boardDur(p, fi) * factor));
+  } else {
+    const flat = enabledFlat(p);
+    const pinnedTime = flat.filter((fi) => isPinned(p, fi)).reduce((s, fi) => s + boardDur(p, fi), 0);
+    const free = flat.filter((fi) => !isPinned(p, fi));
+    const freeTotal = free.reduce((s, fi) => s + boardDur(p, fi), 0) || 1;
+    const target = Math.max(0, p.spotSeconds - pinnedTime);
+    const factor = target / freeTotal;
+    free.forEach((fi) => setBoardDur(p, fi, boardDur(p, fi) * factor));
+  }
+  p.lastRebalanceSpot = p.spotSeconds;
+  return { total: totalSec(p), over: totalSec(p) - p.spotSeconds, mode: targetChanged ? 'whole' : 'pinned' };
 }
+
+// Mark the current spot as "settled" so the next rebalance defaults to the
+// pin-respecting mode (call after load / auto-estimate, before any user edits).
+export function markRebalanceSettled(p = project) { p.lastRebalanceSpot = p.spotSeconds; }
 
 // pin-bounded region [lo,hi] (flat indices) around a set of positions
 function regionAround(p, flat, positions) {
@@ -435,6 +454,7 @@ export function captureState(p = project) {
     pinned: [...p.pinned], annos: [...p.annos.entries()],
     fitMode: p.fitMode, boardFit: [...p.boardFit.entries()],
     audio: p.audio ? { offsetSec: p.audio.offsetSec, inSec: p.audio.inSec, outSec: p.audio.outSec } : null,
+    lastRebalanceSpot: p.lastRebalanceSpot,
   });
 }
 export function applyState(p, snap) {
@@ -452,5 +472,6 @@ export function applyState(p, snap) {
   p.annos = new Map(s.annos || []);
   p.fitMode = s.fitMode || p.fitMode; p.boardFit = new Map(s.boardFit || []);
   if (p.audio && s.audio) { p.audio.offsetSec = s.audio.offsetSec; p.audio.inSec = s.audio.inSec; p.audio.outSec = s.audio.outSec; }
+  p.lastRebalanceSpot = s.lastRebalanceSpot ?? p.spotSeconds;
   computeShots(p);
 }
