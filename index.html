@@ -40,13 +40,6 @@
     <button class="btn ghost sm" id="saveBtn" disabled>Save</button>
     <button class="btn ghost sm" id="assetsBtn" disabled title="asset tracker">Assets</button>
     <div class="menu-wrap">
-      <button class="btn ghost sm" id="imagesBtn" disabled title="downscale or replace source images">Images ▾</button>
-      <div class="menu hidden" id="imagesMenu">
-        <button id="mDownscale">Downscale…</button>
-        <button id="mReplace">Replace…</button>
-      </div>
-    </div>
-    <div class="menu-wrap">
       <button class="btn ghost sm" id="exportBtn" disabled title="sheet preview / export">Export ▾</button>
       <div class="menu hidden" id="exportMenu">
         <button id="mMp4">Export mp4 — final…</button>
@@ -93,6 +86,23 @@
         <button class="btn" id="pickBtn">Choose files…</button>
         <button class="btn ghost" id="pickZip">Choose zip…</button>
         <button class="btn ghost" id="openWorkBtn2">Open work file…</button>
+
+        <div class="drop-divider"><span>or</span></div>
+
+        <div class="split-entry">
+          <h3>Split a storyboard sheet</h3>
+          <button class="btn ghost" id="pickSplitBtn">Choose files…</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="hidden modal-overlay" id="splitModalOverlay">
+      <div class="modal-frame">
+        <div class="modal-topbar">
+          <span>Frame Splitter</span>
+          <button class="tbtn sm" id="splitModalClose" title="cancel">✕</button>
+        </div>
+        <iframe id="splitFrame" title="Frame Splitter"></iframe>
       </div>
     </div>
 
@@ -196,7 +206,7 @@
   <input type="file" id="zipInput" accept=".zip,application/zip" />
   <input type="file" id="workInput" accept=".json,application/json" />
   <input type="file" id="audioInput" accept="audio/*" />
-  <input type="file" id="replaceInput" multiple accept="image/*" />
+  <input type="file" id="splitFileInput" multiple accept="image/*" />
 
   <script type="module" src="/src/editor/main.js"></script>
 </body>

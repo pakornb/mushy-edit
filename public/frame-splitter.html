@@ -1,0 +1,2838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Frame Splitter</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #0d0d0d;
+    --panel: #141414;
+    --panel-2: #1a1a1a;
+    --line: #3a3a3a;
+    --text: #f0f0f0;
+    --text-dim: #8a8a8a;
+    --accent: #e8ff00;
+    --accent-dim: #4d5400;
+    --accent-text: #0d0d0d;
+    --danger: #ff5c5c;
+    --mono: 'SFMono-Regular', 'JetBrains Mono', Consolas, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  :root[data-scheme="amber"] {
+    --bg: #16181c;
+    --panel: #1e2126;
+    --panel-2: #24272d;
+    --line: #33373f;
+    --text: #e7e9ec;
+    --text-dim: #9198a3;
+    --accent: #d9a441;
+    --accent-dim: #6b5527;
+    --accent-text: #16181c;
+    --danger: #d9634a;
+  }
+  :root[data-scheme="cyan"] {
+    --bg: #10181a;
+    --panel: #172022;
+    --panel-2: #1d2729;
+    --line: #313d40;
+    --text: #e6f1f2;
+    --text-dim: #8fa3a6;
+    --accent: #3ecfd6;
+    --accent-dim: #1d4d50;
+    --accent-text: #0a1516;
+    --danger: #ff6b6b;
+  }
+  /* This tool is dark-only by design (matches the house style of your other
+     browser tools) — no light-mode auto-switch, so the scheme picker below
+     always shows a visible change regardless of system/preview color-scheme. */
+  html { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    margin: 0;
+    padding: 0;
+    height: 100%;
+  }
+  body {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .app {
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 22px;
+    flex-wrap: wrap;
+  }
+  h1 {
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    margin: 0;
+  }
+  h1 .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-dim);
+    padding: 2px 7px;
+    border-radius: 3px;
+    margin-left: 10px;
+    vertical-align: 2px;
+  }
+  header p {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 13px;
+    max-width: 520px;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 236px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+  }
+
+  .drop-zone {
+    border: 1.5px dashed var(--line);
+    border-radius: 7px;
+    padding: 10px 10px;
+    text-align: center;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 11.5px;
+    line-height: 1.4;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .drop-zone:hover, .drop-zone.drag {
+    border-color: var(--accent);
+    background: var(--panel-2);
+  }
+  .drop-zone strong { color: var(--text); font-weight: 600; }
+  #fileInput { display: none; }
+
+  .mode-switch {
+    display: flex;
+    gap: 3px;
+    background: var(--panel-2);
+    padding: 3px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+  }
+  .mode-switch button {
+    flex: 1;
+    padding: 6px 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .mode-switch button.active {
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  }
+
+  .field { margin-bottom: 9px; }
+  .field label {
+    display: block;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    line-height: 1.35;
+  }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+  input[type="number"], input[type="text"], select {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 5px 7px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  input[type="number"]:focus, input[type="text"]:focus, select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+
+  .btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .btn-row.stack { flex-direction: column; }
+
+  button.btn {
+    width: auto;
+    padding: 6px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    white-space: nowrap;
+  }
+  button.btn.block { width: 100%; }
+  button.btn:hover { border-color: var(--accent); }
+  button.btn.primary {
+    background: var(--accent);
+    color: var(--accent-text);
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  button.btn.primary:hover { opacity: 0.92; }
+  button.btn.ghost {
+    background: transparent;
+  }
+  button.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--line);
+    margin: 10px 0;
+  }
+
+  .hint {
+    font-size: 10.5px;
+    color: var(--text-dim);
+    line-height: 1.45;
+    margin-top: 3px;
+  }
+
+  .settings-group {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 0 10px;
+    margin-bottom: 10px;
+    background: var(--panel-2);
+  }
+  .settings-group summary {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text);
+    padding: 8px 0;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .settings-group summary::-webkit-details-marker { display: none; }
+  .settings-group summary::after {
+    content: '▾';
+    color: var(--text-dim);
+    font-size: 10px;
+  }
+  .settings-group[open] summary::after { content: '▴'; }
+  .settings-group[open] summary { border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+  .settings-group > .field:last-of-type { margin-bottom: 8px; }
+
+  #controls.disabled { opacity: .4; pointer-events: none; }
+
+  .stage-wrap {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px;
+    min-height: 420px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .stage-wrap.drag { border-color: var(--accent); background: var(--panel-2); }
+  #stageContent {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+  }
+  .empty-stage {
+    color: var(--text-dim);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .canvas-holder {
+    position: relative;
+    max-width: 100%;
+    line-height: 0;
+    touch-action: none;
+  }
+  .canvas-holder canvas {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 3px;
+  }
+
+  .content-box {
+    position: absolute;
+    border: 1.5px dashed var(--accent);
+    background: rgba(217,164,65,0.03);
+    box-sizing: border-box;
+  }
+  .handle {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    background: var(--accent);
+    border: 2px solid var(--panel);
+    border-radius: 3px;
+    transform: translate(-50%, -50%);
+    cursor: pointer;
+  }
+  .handle.nw { cursor: nwse-resize; }
+  .handle.ne { cursor: nesw-resize; }
+  .handle.sw { cursor: nesw-resize; }
+  .handle.se { cursor: nwse-resize; }
+
+  .grid-line {
+    position: absolute;
+    background: var(--accent);
+    z-index: 5;
+  }
+  .grid-line.v { width: 3px; top: 0; bottom: 0; cursor: ew-resize; margin-left: -1.5px; }
+  .grid-line.h { height: 3px; left: 0; right: 0; cursor: ns-resize; margin-top: -1.5px; }
+  .grid-line::after {
+    content: '';
+    position: absolute;
+  }
+  .grid-line.v::after { left: -6px; right: -6px; top: 0; bottom: 0; }
+  .grid-line.h::after { top: -6px; bottom: -6px; left: 0; right: 0; }
+
+  .cell-label {
+    position: absolute;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--panel);
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid var(--accent);
+    pointer-events: none;
+    user-select: none;
+    z-index: 6;
+  }
+  .cell-label.excluded {
+    color: #fff;
+    background: var(--danger);
+    border-color: var(--danger);
+    text-decoration: line-through;
+  }
+  .cell-toggle {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    color: var(--text-dim);
+    background: var(--panel);
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    cursor: pointer;
+    user-select: none;
+    z-index: 6;
+    opacity: 0.7;
+  }
+  .cell-toggle:hover { border-color: var(--accent); color: var(--accent); opacity: 1; }
+  .cell-toggle.excluded {
+    color: #fff;
+    background: var(--danger);
+    border-color: var(--danger);
+    opacity: 1;
+  }
+  .cell-dim-overlay {
+    position: absolute;
+    background: rgba(0,0,0,0.6);
+    pointer-events: none;
+    z-index: 3;
+  }
+  .manual-box.excluded { opacity: .35; }
+  .manual-box {
+    position: absolute;
+    border: 2px solid var(--accent);
+    background: rgba(217,164,65,0.06);
+    box-sizing: border-box;
+  }
+  .manual-box .rm {
+    position: absolute;
+    top: -11px;
+    right: -11px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--danger);
+    color: white;
+    border: 2px solid var(--panel);
+    font-size: 12px;
+    line-height: 16px;
+    text-align: center;
+    cursor: pointer;
+    font-family: var(--sans);
+  }
+  .manual-box .num {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    background: var(--accent);
+    color: var(--accent-text);
+    padding: 1px 5px;
+    border-radius: 3px;
+    pointer-events: none;
+    user-select: none;
+  }
+  .manual-box .box-toggle {
+    position: absolute;
+    bottom: 4px;
+    left: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: var(--panel-2);
+    color: var(--text-dim);
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    cursor: pointer;
+    user-select: none;
+    opacity: 0.7;
+  }
+  .manual-box .box-toggle:hover { border-color: var(--accent); color: var(--accent); opacity: 1; }
+  .manual-box .box-toggle.excluded {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+    opacity: 1;
+  }
+
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .toolbar button.btn { width: auto; margin-bottom: 0; padding: 8px 14px; }
+
+  .thumbs {
+    margin-top: 22px;
+  }
+  .thumbs h3 {
+    font-size: 13px;
+    color: var(--text-dim);
+    font-weight: 500;
+    margin: 0 0 10px;
+    font-family: var(--mono);
+  }
+  .thumb-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 10px;
+  }
+  .thumb {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .thumb img { width: 100%; display: block; }
+  .thumb .cap {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    padding: 5px 7px;
+  }
+
+  .aspect-presets {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+  }
+  .aspect-presets button {
+    font-size: 11.5px;
+    padding: 5px 9px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-family: var(--mono);
+  }
+  .aspect-presets button.active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .page-strip {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    width: 100%;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .page-thumb {
+    position: relative;
+    flex: 0 0 auto;
+    width: 74px;
+    height: 50px;
+    border-radius: 5px;
+    border: 2px solid var(--line);
+    cursor: pointer;
+    overflow: hidden;
+    background: var(--panel-2);
+  }
+  .page-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .page-thumb.active { border-color: var(--accent); }
+  .page-thumb .pg-num {
+    position: absolute; bottom: 2px; left: 3px;
+    font-family: var(--mono); font-size: 9.5px; color: #fff;
+    background: rgba(0,0,0,0.55); padding: 0 4px; border-radius: 2px;
+  }
+  .page-thumb .pg-rm {
+    position: absolute; top: -6px; right: -6px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--danger); color: #fff; border: 2px solid var(--panel);
+    font-size: 10px; line-height: 12px; text-align: center; cursor: pointer;
+  }
+  .page-thumb-add {
+    flex: 0 0 auto;
+    width: 74px;
+    height: 50px;
+    border-radius: 5px;
+    border: 1.5px dashed var(--line);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-dim);
+    font-size: 20px;
+    cursor: pointer;
+    background: transparent;
+  }
+  .page-thumb-add:hover { border-color: var(--accent); color: var(--accent); }
+
+  .viewer-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .viewer-tabs button {
+    font-size: 11.5px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-family: var(--mono);
+  }
+  .viewer-tabs button.active { border-color: var(--accent); color: var(--accent); }
+  .viewer-tabs button:disabled { opacity: .4; cursor: not-allowed; }
+
+  .processed-viewer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+  }
+  .pv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+    width: 100%;
+  }
+  .pv-page-header {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    padding: 8px 0 6px;
+    margin-top: 8px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 12px;
+  }
+  .pv-page-header:first-child { margin-top: 0; }
+  .pv-tile {
+    position: relative;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .pv-tile img { width: 100%; display: block; background: #000; }
+  .pv-tile .pv-num {
+    position: absolute; top: 4px; left: 5px;
+    font-family: var(--mono); font-size: 10.5px; color: #fff;
+    background: rgba(0,0,0,0.6); padding: 1px 5px; border-radius: 3px;
+  }
+  .pv-tile .pv-cap {
+    font-family: var(--mono); font-size: 10px; color: var(--text-dim);
+    padding: 4px 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-align: center;
+  }
+  .processed-viewer .pv-empty {
+    font-size: 13px;
+    color: var(--text-dim);
+    text-align: center;
+    max-width: 380px;
+    padding: 40px 20px;
+  }
+
+  .mushy-modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.72); z-index: 100;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .mushy-mock {
+    width: 100%; max-width: 960px; max-height: 90vh; overflow: auto;
+    background: #14161a; color: #e6e8ec; border-radius: 10px; border: 1px solid #2e333d;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+  .mushy-mock .mm-header { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid #2e333d; }
+  .mushy-mock .mm-header h1 {
+    font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 14px; font-weight: 600; letter-spacing: .02em; margin: 0; text-transform: uppercase;
+  }
+  .mushy-mock .mm-header h1 .dot { color: #ff8a3d; }
+  .mushy-mock .mm-close {
+    margin-left: auto; background: transparent; border: 1px solid #2e333d; color: #e6e8ec;
+    border-radius: 5px; padding: 5px 10px; cursor: pointer; font-family: inherit;
+  }
+  .mushy-mock .mm-body { padding: 18px; }
+  .mushy-mock .mm-note {
+    font-family: ui-monospace, monospace; font-size: 11px; color: #8a929e;
+    background: #1c1f26; border: 1px solid #2e333d; border-radius: 6px; padding: 10px 12px; margin-bottom: 16px;
+  }
+  .mushy-mock .mm-label {
+    font-family: ui-monospace, monospace; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .04em; color: #8a929e; margin-bottom: 8px;
+  }
+  .mushy-mock .mm-slot-row {
+    display: flex; gap: 6px; overflow-x: auto; padding: 10px;
+    background: #0e1013; border: 1px solid #2e333d; border-radius: 6px; margin-bottom: 16px;
+  }
+  .mushy-mock .mm-slot { flex: 0 0 auto; width: 96px; }
+  .mushy-mock .mm-slot img {
+    width: 96px; height: 54px; object-fit: cover; border-radius: 2px; border: 1px solid #2e333d; display: block;
+  }
+  .mushy-mock .mm-slot .mm-num { font-family: ui-monospace, monospace; font-size: 9px; color: #8a929e; margin-top: 3px; text-align: center; }
+  .mushy-mock .mm-cta {
+    background: #ff8a3d; color: #1a1206; border: 1px solid #ff8a3d; border-radius: 6px;
+    padding: 8px 16px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  .mushy-mock .mm-ghost {
+    background: transparent; color: #e6e8ec; border: 1px solid #2e333d; border-radius: 6px;
+    padding: 8px 16px; cursor: pointer; font-family: inherit; margin-left: 8px;
+  }
+  .scheme-switch {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+  }
+  .scheme-switch button {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--sw);
+    border: 2px solid var(--line);
+    cursor: pointer;
+    padding: 0;
+  }
+  .scheme-switch button.active {
+    border-color: var(--text);
+    box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--text);
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <h1>Frame Splitter<span class="tag">storyboard → frames</span></h1>
+      <p>Pull individual frames out of a storyboard sheet.</p>
+    </div>
+    <div class="scheme-switch" id="schemeSwitch">
+      <button data-scheme="gifmaker" title="GIF Maker match" style="--sw:#e8ff00"></button>
+      <button data-scheme="amber" title="Amber" style="--sw:#d9a441"></button>
+      <button data-scheme="cyan" title="Cyan" style="--sw:#3ecfd6"></button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <div class="panel" id="sidebar">
+      <input type="file" id="fileInput" accept="image/*" multiple style="display:none;">
+
+      <div id="controls" class="disabled" style="margin-top:10px;">
+        <div class="mode-switch">
+          <button id="modeGridBtn" class="active">Grid split</button>
+          <button id="modeManualBtn">Manual crop</button>
+        </div>
+
+        <details class="settings-group" id="detectionSettings">
+          <summary>Detection settings</summary>
+          <div class="field" style="display:flex; align-items:center; gap:7px; margin-top:10px;">
+            <input type="checkbox" id="borderSnapToggle" checked style="width:auto;">
+            <label for="borderSnapToggle" style="margin:0; font-size:11.5px; color:var(--text);">Snap to straight border</label>
+          </div>
+          <div class="field" style="display:flex; align-items:center; gap:7px;">
+            <input type="checkbox" id="trimToggle" checked style="width:auto;">
+            <label for="trimToggle" style="margin:0; font-size:11.5px; color:var(--text);">Trim each cell to content</label>
+          </div>
+          <div class="field" style="display:flex; align-items:center; gap:7px;">
+            <input type="checkbox" id="aspectSnapToggle" checked style="width:auto;">
+            <label for="aspectSnapToggle" style="margin:0; font-size:11.5px; color:var(--text);">Snap cell corners to common ratios</label>
+          </div>
+          <div class="field">
+            <label>Border inset (px)</label>
+            <input type="number" id="insetInput" value="0" step="1">
+          </div>
+        </details>
+
+        <div id="gridControls">
+          <div class="row2">
+            <div class="field">
+              <label>Rows</label>
+              <input type="number" id="rowsInput" min="1" max="20" value="3">
+            </div>
+            <div class="field">
+              <label>Columns</label>
+              <input type="number" id="colsInput" min="1" max="20" value="3">
+            </div>
+          </div>
+          <div class="btn-row" style="align-items:center; flex-wrap:nowrap;">
+            <button class="btn primary" id="detectBtn" style="flex:1;">Detect page</button>
+            <label style="display:flex; align-items:center; gap:4px; font-size:11.5px; color:var(--text); white-space:nowrap; cursor:pointer;" title="Uses each page's own rows/cols — set a page's grid size on its own tab first, this just re-runs detection">
+              <input type="checkbox" id="detectAllToggle" style="width:auto;"> All
+            </label>
+          </div>
+
+          <div class="btn-row" style="align-items:center; flex-wrap:nowrap; margin-top:8px;">
+            <button class="btn ghost" id="resetDetectBtn" style="flex:1;">Reset detect page</button>
+            <label style="display:flex; align-items:center; gap:4px; font-size:11.5px; color:var(--text); white-space:nowrap; cursor:pointer;">
+              <input type="checkbox" id="resetAllToggle" style="width:auto;"> All
+            </label>
+          </div>
+        </div>
+
+        <div id="manualControls" style="display:none;">
+          <div class="field">
+            <label>Aspect ratio</label>
+            <div class="aspect-presets" id="aspectPresets">
+              <button data-r="1.7778" class="active">16:9</button>
+              <button data-r="1.3333">4:3</button>
+              <button data-r="2.35">2.35:1</button>
+              <button data-r="1">1:1</button>
+              <button data-r="free">Free</button>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" id="addBoxBtn">Add box</button>
+            <button class="btn" id="smartAddBtn">Smart add</button>
+            <button class="btn" id="autoFillBtn">Auto-fill row</button>
+          </div>
+        </div>
+
+        <hr class="divider">
+        <button class="btn primary block" id="processBtn" disabled>Process sheet → preview</button>
+        <button class="btn block" id="processAllBtn" disabled>Process all → preview</button>
+
+        <details class="settings-group" id="exportNamingSettings">
+          <summary>Export settings</summary>
+          <div class="row2" style="margin-top:10px;">
+            <div class="field">
+              <label>Export resolution</label>
+              <select id="resPreset">
+                <option value="original" selected>Original</option>
+                <option value="540">540p</option>
+                <option value="720">720p</option>
+                <option value="1080">1080p</option>
+                <option value="custom">Custom…</option>
+              </select>
+            </div>
+            <div class="field" id="customResField" style="display:none;">
+              <label>Height (px)</label>
+              <input type="number" id="customResInput" value="540" min="16" step="1">
+            </div>
+          </div>
+
+          <div class="row2">
+            <div class="field">
+              <label>Format</label>
+              <select id="formatSelect">
+                <option value="png" selected>PNG (lossless)</option>
+                <option value="jpeg">JPEG (smaller)</option>
+              </select>
+            </div>
+            <div class="field" id="jpegQualityField" style="display:none;">
+              <label>Quality (<span id="jpegQualityVal">90</span>%)</label>
+              <input type="range" id="jpegQualityInput" min="50" max="100" value="90" style="width:100%;">
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Filename prefix</label>
+            <input type="text" id="namePrefixInput" value="frame">
+          </div>
+          <div class="field" style="display:flex; align-items:center; gap:7px;">
+            <input type="checkbox" id="continuousNumberToggle" style="width:auto;">
+            <label for="continuousNumberToggle" style="margin:0; font-size:11.5px; color:var(--text);">Number continuously across all pages</label>
+          </div>
+          <div id="namePreview" style="font-family:var(--mono); font-size:10.5px; color:var(--text-dim); margin-bottom:8px; line-height:1.5;"></div>
+
+          <div class="field" id="zipModeField">
+            <label>Zip layout (multi-page only)</label>
+            <select id="zipModeSelect">
+              <option value="folders" selected>One zip, foldered by page</option>
+              <option value="flat">One zip, all frames flat</option>
+              <option value="perpage">One zip per page</option>
+            </select>
+          </div>
+        </details>
+
+        <button class="btn block" id="previewExportBtn" disabled>Preview export</button>
+        <button class="btn primary block" id="exportBtn" disabled>Export frames (.zip)</button>
+        <button class="btn block" id="sendMushyBtn" disabled>Send to Mushy Edit</button>
+        <button class="btn ghost block" id="previewMushyBtn">Preview: Mushy Edit integration</button>
+        <button class="btn ghost block" id="resetBtn">Clear all</button>
+      </div>
+    </div>
+
+    <div class="stage-wrap" id="stageWrap">
+      <div class="page-strip" id="pageStrip"></div>
+      <div id="stageContent">
+        <div class="empty-stage" id="emptyStage">Add a storyboard image above to get started.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="thumbs" id="thumbs" style="display:none;">
+    <h3 id="thumbsTitle">// extracted frames</h3>
+    <div class="thumb-grid" id="thumbGrid"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- embedded mode (loaded inside Mushy Edit's import modal) ----------
+  const embedded = new URLSearchParams(location.search).get('embedded') === '1';
+
+  // ---------- color scheme ----------
+  (function(){
+    const schemeSwitch = document.getElementById('schemeSwitch');
+    function applyScheme(name){
+      document.documentElement.dataset.scheme = name;
+      schemeSwitch.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.scheme === name));
+      try { localStorage.setItem('frameSplitterScheme', name); } catch (e) {}
+    }
+    schemeSwitch.querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => applyScheme(b.dataset.scheme));
+    });
+    let saved = 'cyan';
+    try { saved = localStorage.getItem('frameSplitterScheme') || 'cyan'; } catch (e) {}
+    applyScheme(saved);
+  })();
+
+  // ---------- state ----------
+  let img = null;           // HTMLImageElement, natural resolution
+  let natW = 0, natH = 0;
+  let displayScale = 1;     // natural px -> displayed px
+  let mode = "grid";        // 'grid' | 'manual'
+
+  // content box in NATURAL image coordinates
+  let content = { x: 0, y: 0, w: 0, h: 0 };
+
+  // grid interior line positions in NATURAL coords (absolute x for verticals, y for horizontals)
+  let vLines = []; // length cols-1
+  let hLines = []; // length rows-1
+
+  // manual boxes: {x,y,w,h} in NATURAL coords
+  let manualBoxes = [];
+  let manualAspect = 16/9; // null = free
+  let smartAddActive = false;
+
+  // trim rects: parallel to gridCropRects() order, natural coords, or null entries if not computed
+  let trimRects = [];
+
+  // indices of grid cells the user has excluded from output (still shown, dimmed, in the overlay)
+  let excludedCells = [];
+
+  // processed preview frames for the CURRENT page: [{url, blob, w, h}]
+  let processedFrames = [];
+  let processedIndex = 0;
+  let viewerMode = 'original'; // 'original' | 'processed'
+
+  // Snapshot from the last "Process all" / "Preview export" run, showing every page's
+  // output the way the actual export would lay it out. null = show only the current
+  // page's own processedFrames instead (the normal per-page Processed view).
+  let combinedPreview = null;
+
+  // cached full-resolution ink mask, invalidated on new image
+  let fullMask = null;
+
+  // ---------- DOM ----------
+  const fileInput = document.getElementById('fileInput');
+  const controls = document.getElementById('controls');
+  const stageWrap = document.getElementById('stageWrap');
+  const stageContent = document.getElementById('stageContent');
+  const pageStrip = document.getElementById('pageStrip');
+  const emptyStage = document.getElementById('emptyStage');
+  const rowsInput = document.getElementById('rowsInput');
+  const colsInput = document.getElementById('colsInput');
+  const detectBtn = document.getElementById('detectBtn');
+  const exportBtn = document.getElementById('exportBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const modeGridBtn = document.getElementById('modeGridBtn');
+  const modeManualBtn = document.getElementById('modeManualBtn');
+  const gridControls = document.getElementById('gridControls');
+  const manualControls = document.getElementById('manualControls');
+  const addBoxBtn = document.getElementById('addBoxBtn');
+  const aspectPresets = document.getElementById('aspectPresets');
+  const trimToggle = document.getElementById('trimToggle');
+  const aspectSnapToggle = document.getElementById('aspectSnapToggle');
+  const insetInput = document.getElementById('insetInput');
+  const smartAddBtn = document.getElementById('smartAddBtn');
+  const autoFillBtn = document.getElementById('autoFillBtn');
+  const resPreset = document.getElementById('resPreset');
+  const customResField = document.getElementById('customResField');
+  const customResInput = document.getElementById('customResInput');
+  const borderSnapToggle = document.getElementById('borderSnapToggle');
+  const formatSelect = document.getElementById('formatSelect');
+  const jpegQualityField = document.getElementById('jpegQualityField');
+  const jpegQualityInput = document.getElementById('jpegQualityInput');
+  const jpegQualityVal = document.getElementById('jpegQualityVal');
+  const namePrefixInput = document.getElementById('namePrefixInput');
+  const continuousNumberToggle = document.getElementById('continuousNumberToggle');
+  const namePreview = document.getElementById('namePreview');
+  const zipModeSelect = document.getElementById('zipModeSelect');
+
+  resPreset.addEventListener('change', () => {
+    customResField.style.display = resPreset.value === 'custom' ? 'block' : 'none';
+  });
+
+  function targetHeightForExport(){
+    if (resPreset.value === 'original') return null;
+    if (resPreset.value === 'custom') return Math.max(16, parseInt(customResInput.value) || 540);
+    return parseInt(resPreset.value, 10);
+  }
+
+  function currentExt(){ return formatSelect.value === 'jpeg' ? 'jpg' : 'png'; }
+  function currentMime(){ return formatSelect.value === 'jpeg' ? 'image/jpeg' : 'image/png'; }
+  function currentQuality(){ return formatSelect.value === 'jpeg' ? (parseInt(jpegQualityInput.value) || 90) / 100 : undefined; }
+
+  formatSelect.addEventListener('change', () => {
+    jpegQualityField.style.display = formatSelect.value === 'jpeg' ? 'block' : 'none';
+    updateNamePreview();
+  });
+  jpegQualityInput.addEventListener('input', () => { jpegQualityVal.textContent = jpegQualityInput.value; });
+  namePrefixInput.addEventListener('input', updateNamePreview);
+  continuousNumberToggle.addEventListener('change', updateNamePreview);
+
+  // Counts how many (non-hidden) frames each page would produce, without rendering any
+  // images — just re-reads each page's stored crop geometry. Used for continuous numbering
+  // and for the naming preview, cheaply enough to call on every keystroke.
+  function getPageFrameCounts(){
+    if (!pages.length) return [computeCurrentCrops().length];
+    const saved = { img, natW, natH, content, vLines, hLines, trimRects, excludedCells, manualBoxes };
+    const counts = pages.map(p => {
+      img = p.img; natW = p.natW; natH = p.natH;
+      content = { ...p.content };
+      vLines = p.vLines.slice(); hLines = p.hLines.slice(); trimRects = p.trimRects.slice();
+      excludedCells = p.excludedCells ? p.excludedCells.slice() : [];
+      manualBoxes = p.manualBoxes.map(b => ({ ...b }));
+      return computeCurrentCrops().length;
+    });
+    img = saved.img; natW = saved.natW; natH = saved.natH; content = saved.content;
+    vLines = saved.vLines; hLines = saved.hLines; trimRects = saved.trimRects;
+    excludedCells = saved.excludedCells; manualBoxes = saved.manualBoxes;
+    return counts;
+  }
+
+  function padNum(n, width){ return String(n).padStart(width, '0'); }
+
+  // frameNumberInPage is 1-based position within its own page
+  function exportFileName(pageIndex, frameNumberInPage, pageCounts){
+    const prefix = (namePrefixInput.value || 'frame').trim() || 'frame';
+    const ext = currentExt();
+    if (continuousNumberToggle.checked){
+      const total = pageCounts.reduce((a,b) => a+b, 0);
+      const offset = pageCounts.slice(0, pageIndex).reduce((a,b) => a+b, 0);
+      const width = Math.max(2, String(total).length);
+      return prefix + '_' + padNum(offset + frameNumberInPage, width) + '.' + ext;
+    }
+    const width = Math.max(2, String(pageCounts[pageIndex] || frameNumberInPage).length);
+    return prefix + '_' + padNum(frameNumberInPage, width) + '.' + ext;
+  }
+
+  function updateNamePreview(){
+    const counts = getPageFrameCounts();
+    const total = counts.reduce((a,b) => a+b, 0);
+    if (!total){ namePreview.textContent = 'No frames yet.'; return; }
+    const firstName = exportFileName(0, 1, counts);
+    const lastPageIdx = counts.length - 1;
+    const lastName = exportFileName(lastPageIdx, counts[lastPageIdx] || 1, counts);
+    const pageNote = pages.length > 1 ? ' across ' + pages.length + ' pages' : '';
+    namePreview.textContent = total === 1
+      ? firstName
+      : firstName + '  …  ' + lastName + '  (' + total + ' frames' + pageNote + ')';
+  }
+  // pages: one per loaded image. Each holds that page's own crop state.
+  // {name, img, natW, natH, content, vLines, hLines, trimRects, manualBoxes, rows, cols}
+  let pages = [];
+  let currentPageIndex = -1;
+
+  const detectAllToggle = document.getElementById('detectAllToggle');
+  const resetAllToggle = document.getElementById('resetAllToggle');
+  const resetDetectBtn = document.getElementById('resetDetectBtn');
+  const processBtn = document.getElementById('processBtn');
+  const processAllBtn = document.getElementById('processAllBtn');
+  const previewExportBtn = document.getElementById('previewExportBtn');
+  const sendMushyBtn = document.getElementById('sendMushyBtn');
+  const previewMushyBtn = document.getElementById('previewMushyBtn');
+  const thumbs = document.getElementById('thumbs');
+  const thumbGrid = document.getElementById('thumbGrid');
+  const thumbsTitle = document.getElementById('thumbsTitle');
+
+  let canvasHolder, displayCanvas, ctx;
+  let viewerTabs = null;
+  let processedViewer = null;
+
+  // ---------- file loading ----------
+  stageWrap.addEventListener('dragover', e => { e.preventDefault(); stageWrap.classList.add('drag'); });
+  stageWrap.addEventListener('dragleave', e => { if (e.target === stageWrap) stageWrap.classList.remove('drag'); });
+  stageWrap.addEventListener('drop', e => {
+    e.preventDefault();
+    stageWrap.classList.remove('drag');
+    if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+  fileInput.addEventListener('change', e => {
+    if (e.target.files.length) addFiles(e.target.files);
+    fileInput.value = '';
+  });
+
+  function decodeImage(file){
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = reject;
+        image.src = e.target.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function addFiles(fileList){
+    const files = [...fileList].filter(f => f.type.startsWith('image/'));
+    if (!files.length) return;
+    const wasEmpty = pages.length === 0;
+    for (const file of files){
+      try {
+        const image = await decodeImage(file);
+        pages.push({
+          name: file.name.replace(/\.[^.]+$/, ''),
+          img: image,
+          natW: image.naturalWidth,
+          natH: image.naturalHeight,
+          content: { x: 0, y: 0, w: image.naturalWidth, h: image.naturalHeight },
+          vLines: [], hLines: [], trimRects: [],
+          manualBoxes: [],
+          rows: parseInt(rowsInput.value) || 3,
+          cols: parseInt(colsInput.value) || 3,
+          processed: [],
+          excludedCells: []
+        });
+      } catch (err){ console.error('Could not load', file.name, err); }
+    }
+    controls.classList.remove('disabled');
+    renderPageStrip();
+    if (wasEmpty) switchToPage(0);
+  }
+
+  function saveCurrentPageState(){
+    if (currentPageIndex < 0 || !pages[currentPageIndex]) return;
+    const p = pages[currentPageIndex];
+    p.content = { ...content };
+    p.vLines = vLines.slice();
+    p.hLines = hLines.slice();
+    p.trimRects = trimRects.slice();
+    p.excludedCells = excludedCells.slice();
+    p.manualBoxes = manualBoxes.map(b => ({ ...b }));
+    p.rows = parseInt(rowsInput.value) || p.rows;
+    p.cols = parseInt(colsInput.value) || p.cols;
+    p.processed = processedFrames;
+  }
+
+  function switchToPage(idx){
+    if (idx < 0 || idx >= pages.length) return;
+    saveCurrentPageState();
+    currentPageIndex = idx;
+    const p = pages[idx];
+    img = p.img; natW = p.natW; natH = p.natH;
+    content = { ...p.content };
+    vLines = p.vLines.slice();
+    hLines = p.hLines.slice();
+    trimRects = p.trimRects.slice();
+    excludedCells = p.excludedCells ? p.excludedCells.slice() : [];
+    manualBoxes = p.manualBoxes.map(b => ({ ...b }));
+    rowsInput.value = p.rows;
+    colsInput.value = p.cols;
+    fullMask = null;
+    processedFrames = p.processed || [];
+    processedIndex = 0;
+    buildStage();
+    syncActionButtons();
+    thumbs.style.display = 'none';
+    thumbGrid.innerHTML = '';
+    renderPageStrip();
+  }
+
+  function removePage(idx){
+    const wasCurrent = idx === currentPageIndex;
+    pages.splice(idx, 1);
+    if (!pages.length){
+      currentPageIndex = -1;
+      img = null;
+      processedFrames.forEach(f => { if (f.url) URL.revokeObjectURL(f.url); });
+      processedFrames = [];
+      processedIndex = 0;
+      viewerMode = 'original';
+      combinedPreview = null;
+      controls.classList.add('disabled');
+      stageContent.innerHTML = '';
+      const empty = document.createElement('div');
+      empty.className = 'empty-stage';
+      empty.textContent = 'Add a storyboard image above to get started.';
+      stageContent.appendChild(empty);
+      renderPageStrip();
+      return;
+    }
+    if (wasCurrent){
+      switchToPage(Math.min(idx, pages.length - 1));
+    } else {
+      if (idx < currentPageIndex) currentPageIndex--;
+      renderPageStrip();
+    }
+  }
+
+  function renderPageStrip(){
+    updateExportButtonLabel();
+    processAllBtn.disabled = pages.length < 2;
+    previewExportBtn.disabled = pages.length < 2;
+    if (!pageStrip) return;
+    pageStrip.innerHTML = '';
+    pageStrip.style.display = 'flex';
+    pages.forEach((p, i) => {
+      const el = document.createElement('div');
+      el.className = 'page-thumb' + (i === currentPageIndex ? ' active' : '');
+      const im = document.createElement('img');
+      im.src = p.img.src;
+      el.appendChild(im);
+      const num = document.createElement('div');
+      num.className = 'pg-num';
+      num.textContent = i + 1;
+      el.appendChild(num);
+      const rm = document.createElement('div');
+      rm.className = 'pg-rm';
+      rm.textContent = '×';
+      rm.title = 'Remove this page';
+      rm.addEventListener('click', ev => { ev.stopPropagation(); removePage(i); });
+      el.appendChild(rm);
+      el.addEventListener('click', () => { if (i !== currentPageIndex) switchToPage(i); });
+      pageStrip.appendChild(el);
+    });
+    const addEl = document.createElement('div');
+    addEl.className = 'page-thumb-add';
+    addEl.textContent = '+';
+    addEl.title = 'Add more pages';
+    addEl.addEventListener('click', () => fileInput.click());
+    pageStrip.appendChild(addEl);
+  }
+
+  function updateExportButtonLabel(){
+    exportBtn.textContent = pages.length > 1 ? 'Export all frames (.zip)' : 'Export frames (.zip)';
+  }
+
+  // ---------- stage construction ----------
+  function buildStage(){
+    stageContent.innerHTML = '';
+
+    viewerTabs = document.createElement('div');
+    viewerTabs.className = 'viewer-tabs';
+    const origTab = document.createElement('button');
+    origTab.textContent = 'Original';
+    origTab.addEventListener('click', () => { viewerMode = 'original'; updateViewerUI(); });
+    const procTab = document.createElement('button');
+    procTab.addEventListener('click', () => { viewerMode = 'processed'; updateViewerUI(); });
+    const exportTab = document.createElement('button');
+    exportTab.addEventListener('click', () => { viewerMode = 'export'; updateViewerUI(); });
+    viewerTabs.appendChild(origTab);
+    viewerTabs.appendChild(procTab);
+    viewerTabs.appendChild(exportTab);
+    stageContent.appendChild(viewerTabs);
+
+    const maxW = Math.min(stageWrap.clientWidth - 32 || 1100, 1100);
+    displayScale = Math.min(1, maxW / natW);
+    const dispW = Math.round(natW * displayScale);
+    const dispH = Math.round(natH * displayScale);
+
+    canvasHolder = document.createElement('div');
+    canvasHolder.className = 'canvas-holder';
+    canvasHolder.style.width = dispW + 'px';
+    canvasHolder.style.height = dispH + 'px';
+
+    displayCanvas = document.createElement('canvas');
+    displayCanvas.width = dispW;
+    displayCanvas.height = dispH;
+    ctx = displayCanvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, dispW, dispH);
+
+    displayCanvas.addEventListener('click', stageClickHandler);
+    canvasHolder.appendChild(displayCanvas);
+    stageContent.appendChild(canvasHolder);
+
+    processedViewer = document.createElement('div');
+    processedViewer.className = 'processed-viewer';
+    processedViewer.innerHTML =
+      '<div class="pv-grid" id="pvGrid"></div>' +
+      '<div class="pv-empty" id="pvEmpty" style="display:none;">This page hasn\'t been processed yet — click "Process sheet → preview" to see frames here.</div>';
+    stageContent.appendChild(processedViewer);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'toolbar';
+    stageContent.appendChild(toolbar);
+
+    renderOverlay();
+    renderPageStrip();
+    updateViewerUI();
+  }
+
+  function updateViewerUI(){
+    if (!viewerTabs) return;
+    const [origTab, procTab, exportTab] = viewerTabs.querySelectorAll('button');
+    procTab.textContent = 'Processed (' + processedFrames.length + ')';
+    exportTab.textContent = 'Preview Export (' + (combinedPreview ? combinedPreview.totalCount : 0) + ')';
+    origTab.classList.toggle('active', viewerMode === 'original');
+    procTab.classList.toggle('active', viewerMode === 'processed');
+    exportTab.classList.toggle('active', viewerMode === 'export');
+    canvasHolder.style.display = viewerMode === 'original' ? 'block' : 'none';
+    processedViewer.style.display = (viewerMode === 'processed' || viewerMode === 'export') ? 'flex' : 'none';
+
+    const grid = processedViewer.querySelector('#pvGrid');
+    const emptyEl = processedViewer.querySelector('#pvEmpty');
+
+    if (viewerMode === 'export'){
+      if (combinedPreview && combinedPreview.totalCount){
+        renderCombinedPreview(grid, emptyEl);
+      } else {
+        grid.style.display = 'none';
+        emptyEl.textContent = 'Nothing here yet — click "Process all" or "Preview export" to see every page\'s output together.';
+        emptyEl.style.display = 'block';
+      }
+    } else if (viewerMode === 'processed'){
+      if (processedFrames.length){
+        grid.style.display = 'grid';
+        emptyEl.style.display = 'none';
+        grid.innerHTML = '';
+        const pageCounts = getPageFrameCounts();
+        processedFrames.forEach((f, i) => {
+          const fname = exportFileName(Math.max(0, currentPageIndex), i+1, pageCounts);
+          grid.appendChild(makePvTile(f, i+1, fname));
+        });
+      } else {
+        grid.style.display = 'none';
+        emptyEl.textContent = 'This page hasn\'t been processed yet — click "Process sheet → preview" to see frames here.';
+        emptyEl.style.display = 'block';
+      }
+    }
+  }
+
+  function makePvTile(f, num, fname){
+    const tile = document.createElement('div');
+    tile.className = 'pv-tile';
+    tile.innerHTML = '<img src="' + f.url + '" alt="' + fname + '">'
+      + '<div class="pv-num">' + num + '</div>'
+      + '<div class="pv-cap">' + fname + '</div>';
+    tile.title = fname + '  ·  ' + f.w + '×' + f.h + 'px';
+    return tile;
+  }
+
+  // Renders the last "Process all"/"Preview export" snapshot: one flowing grid if numbering
+  // is continuous across pages, or a labeled, separated row per page if each page restarts
+  // its own numbering — matching how the actual export would be laid out either way.
+  function renderCombinedPreview(grid, emptyEl){
+    grid.innerHTML = '';
+    if (!combinedPreview.totalCount){
+      grid.style.display = 'none';
+      emptyEl.style.display = 'block';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    grid.style.display = 'block'; // becomes a plain flow container holding one grid per page
+
+    // Page separators always show, regardless of numbering mode — otherwise one page's
+    // frames run straight into the next with nothing marking where the boundary is.
+    // "Continuous" only changes whether the tile numbers keep counting up across pages
+    // or restart at 1 for each one.
+    let n = 1;
+    combinedPreview.groups.forEach(g => {
+      if (!g.frames.length) return;
+      const header = document.createElement('div');
+      header.className = 'pv-page-header';
+      header.textContent = g.pageName + ' — ' + g.frames.length + ' frame' + (g.frames.length === 1 ? '' : 's');
+      grid.appendChild(header);
+      const sub = document.createElement('div');
+      sub.className = 'pv-grid';
+      g.frames.forEach((f, i) => {
+        const num = combinedPreview.continuous ? n++ : (i+1);
+        sub.appendChild(makePvTile(f, num, f.fname));
+      });
+      grid.appendChild(sub);
+    });
+  }
+
+
+
+  function toDisp(v){ return v * displayScale; }
+  function toNat(v){ return v / displayScale; }
+
+  // ---------- overlay rendering ----------
+  function clearOverlay(){
+    canvasHolder.querySelectorAll('.content-box,.handle,.grid-line,.cell-label,.cell-toggle,.manual-box,.cell-dim-overlay').forEach(el => el.remove());
+  }
+
+  function renderOverlay(){
+    clearOverlay();
+    if (mode === 'grid') renderGridOverlay();
+    else renderManualOverlay();
+  }
+
+  function renderGridOverlay(){
+    // content box
+    const box = document.createElement('div');
+    box.className = 'content-box';
+    box.style.cursor = 'move';
+    positionRect(box, content);
+    makeContentBoxDraggable(box);
+    canvasHolder.appendChild(box);
+
+    ['nw','ne','sw','se'].forEach(corner => {
+      const h = document.createElement('div');
+      h.className = 'handle ' + corner;
+      positionHandle(h, corner, content);
+      makeContentHandleDraggable(h, corner);
+      canvasHolder.appendChild(h);
+    });
+
+    // grid lines (only if we have detected lines matching current rows/cols)
+    vLines.forEach((x, i) => {
+      const line = document.createElement('div');
+      line.className = 'grid-line v';
+      line.style.left = toDisp(x) + 'px';
+      line.style.top = toDisp(content.y) + 'px';
+      line.style.height = toDisp(content.h) + 'px';
+      makeLineDraggable(line, 'v', i);
+      canvasHolder.appendChild(line);
+    });
+    hLines.forEach((y, i) => {
+      const line = document.createElement('div');
+      line.className = 'grid-line h';
+      line.style.top = toDisp(y) + 'px';
+      line.style.left = toDisp(content.x) + 'px';
+      line.style.width = toDisp(content.w) + 'px';
+      makeLineDraggable(line, 'h', i);
+      canvasHolder.appendChild(line);
+    });
+
+    // cell numbers (plain label) + a separate dedicated toggle to hide/show that frame
+    const gridActive = vLines.length || hLines.length || (rowsInput.value==1 && colsInput.value==1);
+    if (gridActive) {
+      const rowBounds = [content.y, ...hLines, content.y + content.h];
+      const colBounds = [content.x, ...vLines, content.x + content.w];
+      let n = 0;
+      for (let r = 0; r < rowBounds.length - 1; r++){
+        for (let c = 0; c < colBounds.length - 1; c++){
+          const idx = n++;
+          const cellRect = {
+            x: colBounds[c], y: rowBounds[r],
+            w: colBounds[c+1]-colBounds[c], h: rowBounds[r+1]-rowBounds[r]
+          };
+          const isExcluded = !!excludedCells[idx];
+          if (isExcluded){
+            const dim = document.createElement('div');
+            dim.className = 'cell-dim-overlay';
+            positionRect(dim, cellRect);
+            canvasHolder.appendChild(dim);
+          }
+          const lbl = document.createElement('div');
+          lbl.className = 'cell-label' + (isExcluded ? ' excluded' : '');
+          lbl.textContent = idx + 1;
+          lbl.style.left = toDisp(cellRect.x) + 6 + 'px';
+          lbl.style.top = toDisp(cellRect.y) + 6 + 'px';
+          canvasHolder.appendChild(lbl);
+
+          const toggle = document.createElement('div');
+          toggle.className = 'cell-toggle' + (isExcluded ? ' excluded' : '');
+          toggle.innerHTML = eyeIconSVG(isExcluded);
+          toggle.title = isExcluded ? 'Hidden — click to show this frame again' : 'Click to hide this frame from output';
+          toggle.style.left = (toDisp(cellRect.x) + toDisp(cellRect.w) - 42) + 'px';
+          toggle.style.top = toDisp(cellRect.y) + 6 + 'px';
+          toggle.addEventListener('click', () => {
+            excludedCells[idx] = !excludedCells[idx];
+            syncActionButtons();
+            renderOverlay();
+          });
+          canvasHolder.appendChild(toggle);
+        }
+      }
+    }
+
+    // trimmed content boxes (the actual crop that will export, when trim is on)
+    if (gridActive && trimToggle.checked && trimRects.length){
+      trimRects.forEach((r, i) => {
+        if (!r) return;
+        const el = document.createElement('div');
+        el.className = 'manual-box' + (excludedCells[i] ? ' excluded' : '');
+        positionRect(el, r);
+
+        const resizeSE = document.createElement('div');
+        resizeSE.className = 'handle se';
+        resizeSE.style.cssText = 'position:absolute; right:-7px; bottom:-7px; left:auto; top:auto; transform:none;';
+        el.appendChild(resizeSE);
+
+        const resizeNW = document.createElement('div');
+        resizeNW.className = 'handle nw';
+        resizeNW.style.cssText = 'position:absolute; left:-7px; top:-7px; right:auto; bottom:auto; transform:none;';
+        el.appendChild(resizeNW);
+
+        makeTrimBoxDraggable(el, i);
+        makeCornerResizeDraggable(resizeSE, 'se', () => trimRects[i], (r) => { trimRects[i] = r; });
+        makeCornerResizeDraggable(resizeNW, 'nw', () => trimRects[i], (r) => { trimRects[i] = r; });
+        canvasHolder.appendChild(el);
+      });
+    }
+  }
+
+  // generic corner-resize: works for either corner, on any rect-array/index via getter+setter
+  const COMMON_ASPECTS = [16/9, 1.85, 2.39, 4/3, 3/2, 5/4, 1, 4/5, 2/3, 3/4, 9/16];
+  function snapToCommonAspect(w, h, tolerance){
+    tolerance = tolerance || 0.05;
+    const ratio = w / h;
+    let best = null, bestDiff = Infinity;
+    for (const a of COMMON_ASPECTS){
+      const diff = Math.abs(ratio - a) / a;
+      if (diff < bestDiff){ bestDiff = diff; best = a; }
+    }
+    return (best !== null && bestDiff <= tolerance) ? best : null;
+  }
+
+  function makeCornerResizeDraggable(handle, corner, getRect, setRect){
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      handle.setPointerCapture(e.pointerId);
+      const startX = e.clientX, startY = e.clientY;
+      const start = { ...getRect() };
+      function move(ev){
+        const dx = toNat(ev.clientX - startX);
+        const dy = toNat(ev.clientY - startY);
+        let { x, y, w, h } = start;
+        if (corner === 'nw'){
+          x = start.x + dx; y = start.y + dy;
+          w = start.w - dx; h = start.h - dy;
+        } else { // se
+          w = start.w + dx; h = start.h + dy;
+        }
+        if (aspectSnapToggle.checked && w > 15 && h > 15){
+          const snapped = snapToCommonAspect(w, h);
+          if (snapped){
+            h = w / snapped;
+            if (corner === 'nw') y = (start.y + start.h) - h;
+          }
+        }
+        if (w < 10){ if (corner === 'nw') x = start.x + start.w - 10; w = 10; }
+        if (h < 10){ if (corner === 'nw') y = start.y + start.h - 10; h = 10; }
+        x = clamp(x, 0, natW - 10);
+        y = clamp(y, 0, natH - 10);
+        w = Math.min(w, natW - x);
+        h = Math.min(h, natH - y);
+        setRect({ x, y, w, h });
+        renderOverlay();
+      }
+      function up(){
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  function makeTrimBoxDraggable(el, index){
+    el.addEventListener('pointerdown', e => {
+      if (e.target !== el) return;
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      const startX = e.clientX, startY = e.clientY;
+      const start = { ...trimRects[index] };
+      function move(ev){
+        const dx = toNat(ev.clientX - startX);
+        const dy = toNat(ev.clientY - startY);
+        trimRects[index] = { ...trimRects[index], x: start.x+dx, y: start.y+dy };
+        renderOverlay();
+      }
+      function up(){
+        el.releasePointerCapture(e.pointerId);
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  function positionRect(el, r){
+    el.style.left = toDisp(r.x) + 'px';
+    el.style.top = toDisp(r.y) + 'px';
+    el.style.width = toDisp(r.w) + 'px';
+    el.style.height = toDisp(r.h) + 'px';
+  }
+  function positionHandle(el, corner, r){
+    const px = corner.includes('w') ? r.x : r.x + r.w;
+    const py = corner.includes('n') ? r.y : r.y + r.h;
+    el.style.left = toDisp(px) + 'px';
+    el.style.top = toDisp(py) + 'px';
+  }
+
+  // ---------- dragging: content box corners ----------
+  function makeContentHandleDraggable(handle, corner){
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      handle.setPointerCapture(e.pointerId);
+      const startX = e.clientX, startY = e.clientY;
+      const start = { ...content };
+      function move(ev){
+        const dx = toNat(ev.clientX - startX);
+        const dy = toNat(ev.clientY - startY);
+        let { x, y, w, h } = start;
+        if (corner.includes('w')) { x = start.x + dx; w = start.w - dx; }
+        if (corner.includes('e')) { w = start.w + dx; }
+        if (corner.includes('n')) { y = start.y + dy; h = start.h - dy; }
+        if (corner.includes('s')) { h = start.h + dy; }
+        x = clamp(x, 0, natW - 10);
+        y = clamp(y, 0, natH - 10);
+        w = clamp(w, 10, natW - x);
+        h = clamp(h, 10, natH - y);
+        content = { x, y, w, h };
+        renderOverlay();
+      }
+      function up(ev){
+        handle.releasePointerCapture(e.pointerId);
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        if (trimToggle.checked) applyTrim();
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  function makeContentBoxDraggable(box){
+    box.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      box.setPointerCapture(e.pointerId);
+      const startX = e.clientX, startY = e.clientY;
+      const start = { ...content };
+      const lineStartV = vLines.slice();
+      const lineStartH = hLines.slice();
+      function move(ev){
+        const dx = toNat(ev.clientX - startX);
+        const dy = toNat(ev.clientY - startY);
+        const x = clamp(start.x + dx, 0, natW - start.w);
+        const y = clamp(start.y + dy, 0, natH - start.h);
+        const actualDx = x - start.x, actualDy = y - start.y;
+        content = { x, y, w: start.w, h: start.h };
+        vLines = lineStartV.map(v => v + actualDx);
+        hLines = lineStartH.map(v => v + actualDy);
+        renderOverlay();
+      }
+      function up(){
+        box.releasePointerCapture(e.pointerId);
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        if (trimToggle.checked) applyTrim();
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  // ---------- dragging: grid lines ----------
+  function makeLineDraggable(line, axis, index){
+    line.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      line.setPointerCapture(e.pointerId);
+      const startClient = axis === 'v' ? e.clientX : e.clientY;
+      const arr = axis === 'v' ? vLines : hLines;
+      const startVal = arr[index];
+      function move(ev){
+        const clientNow = axis === 'v' ? ev.clientX : ev.clientY;
+        const delta = toNat(clientNow - startClient);
+        let val = startVal + delta;
+        const lo = axis === 'v' ? content.x : content.y;
+        const hi = axis === 'v' ? content.x + content.w : content.y + content.h;
+        val = clamp(val, lo + 4, hi - 4);
+        arr[index] = val;
+        renderOverlay();
+      }
+      function up(){
+        line.releasePointerCapture(e.pointerId);
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        if (trimToggle.checked) applyTrim();
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+  // open eye = included/visible (click to hide); eye-with-slash = hidden (click to show again)
+  function eyeIconSVG(hidden){
+    if (hidden){
+      return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>'
+        + '<line x1="1" y1="1" x2="23" y2="23"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+      + '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  }
+
+  // ---------- grid detection (Otsu + valley search) ----------
+  function detectGrid(){
+    const rows = Math.max(1, parseInt(rowsInput.value) || 1);
+    const cols = Math.max(1, parseInt(colsInput.value) || 1);
+    excludedCells = [];
+
+    // sample the content region at full natural resolution via an offscreen canvas
+    const off = document.createElement('canvas');
+    off.width = Math.round(content.w);
+    off.height = Math.round(content.h);
+    const octx = off.getContext('2d');
+    octx.drawImage(img, content.x, content.y, content.w, content.h, 0, 0, off.width, off.height);
+    const data = octx.getImageData(0, 0, off.width, off.height).data;
+    const W = off.width, H = off.height;
+
+    // grayscale + histogram for Otsu
+    const gray = new Uint8ClampedArray(W * H);
+    const hist = new Array(256).fill(0);
+    for (let i = 0, p = 0; i < data.length; i += 4, p++){
+      const g = Math.round(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
+      gray[p] = g;
+      hist[g]++;
+    }
+    const threshold = otsuThreshold(hist, W*H);
+
+    // detect background polarity by sampling border pixels
+    let borderSum = 0, borderCount = 0;
+    for (let x = 0; x < W; x++){ borderSum += gray[x]; borderSum += gray[(H-1)*W + x]; borderCount += 2; }
+    for (let y = 0; y < H; y++){ borderSum += gray[y*W]; borderSum += gray[y*W + (W-1)]; borderCount += 2; }
+    const borderAvg = borderSum / borderCount;
+    const bgIsLight = borderAvg > threshold;
+
+    // ink mask: 1 where "content" (not background)
+    // if bg light -> ink = dark pixels (gray < threshold)
+    // if bg dark  -> ink = light pixels (gray >= threshold)  [treats whole bright panel as content]
+    const rowDensity = new Float64Array(H);
+    const colDensity = new Float64Array(W);
+    for (let y = 0; y < H; y++){
+      let rowSum = 0;
+      for (let x = 0; x < W; x++){
+        const g = gray[y*W + x];
+        const isInk = bgIsLight ? (g < threshold) : (g >= threshold);
+        if (isInk) { rowSum++; colDensity[x]++; }
+      }
+      rowDensity[y] = rowSum / W;
+    }
+    for (let x = 0; x < W; x++) colDensity[x] /= H;
+
+    const rowSplitsLocal = valleySplits(rowDensity, rows - 1);
+    const colSplitsLocal = valleySplits(colDensity, cols - 1);
+
+    hLines = rowSplitsLocal.map(v => content.y + v);
+    vLines = colSplitsLocal.map(v => content.x + v);
+
+    renderOverlay();
+    syncActionButtons();
+  }
+
+  function otsuThreshold(hist, total){
+    let sum = 0;
+    for (let i = 0; i < 256; i++) sum += i * hist[i];
+    let sumB = 0, wB = 0, wF = 0, maxVar = 0, threshold = 127;
+    for (let t = 0; t < 256; t++){
+      wB += hist[t];
+      if (wB === 0) continue;
+      wF = total - wB;
+      if (wF === 0) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB;
+      const mF = (sum - sumB) / wF;
+      const varBetween = wB * wF * (mB - mF) * (mB - mF);
+      if (varBetween > maxVar) { maxVar = varBetween; threshold = t; }
+    }
+    return threshold;
+  }
+
+  function valleySplits(density, nSplits, excludeEdgeFrac){
+    excludeEdgeFrac = excludeEdgeFrac || 0.04;
+    const L = density.length;
+    if (nSplits <= 0 || L === 0) return [];
+    const k = Math.max(3, Math.floor(L/200));
+    const half = Math.floor(k/2);
+    const smooth = new Float64Array(L);
+    let running = 0;
+    for (let i = 0; i < L; i++){
+      let s = 0, c = 0;
+      for (let j = Math.max(0,i-half); j <= Math.min(L-1,i+half); j++){ s += density[j]; c++; }
+      smooth[i] = s / c;
+    }
+    const lo = Math.floor(L * excludeEdgeFrac);
+    const hi = L - lo;
+    const splits = [];
+    for (let idx = 0; idx < nSplits; idx++){
+      const expected = Math.floor(L * (idx+1) / (nSplits+1));
+      const window = Math.max(4, Math.floor(L / (nSplits+1) / 2));
+      const a = Math.max(lo, expected - window), b = Math.min(hi, expected + window);
+      let bestI = a, bestV = Infinity;
+      for (let i = a; i < b; i++){
+        if (smooth[i] < bestV){ bestV = smooth[i]; bestI = i; }
+      }
+      splits.push(bestI);
+    }
+    return splits;
+  }
+
+  detectBtn.addEventListener('click', () => { detectGrid(); applyTrim(); });
+
+  detectAllToggle.addEventListener('change', () => {
+    detectBtn.textContent = detectAllToggle.checked ? 'Detect all' : 'Detect page';
+  });
+  resetAllToggle.addEventListener('change', () => {
+    resetDetectBtn.textContent = resetAllToggle.checked ? 'Reset detect all' : 'Reset detect page';
+  });
+
+  function detectAllPages(){
+    const startIndex = currentPageIndex;
+    saveCurrentPageState();
+    for (let i = 0; i < pages.length; i++){
+      const p = pages[i];
+      img = p.img; natW = p.natW; natH = p.natH;
+      content = { ...p.content };
+      // each page keeps its own rows/cols — sync them into the (shared) inputs
+      // detectGrid() reads from, rather than overwriting them with whatever page was active
+      rowsInput.value = p.rows;
+      colsInput.value = p.cols;
+      fullMask = null;
+      detectGrid();
+      applyTrim();
+      p.content = { ...content };
+      p.vLines = vLines.slice();
+      p.hLines = hLines.slice();
+      p.trimRects = trimRects.slice();
+    }
+    // currentPageIndex never moved during the loop, so switchToPage's own auto-save
+    // would otherwise re-save the LAST page's leftover working state over startIndex's
+    // just-computed results. Setting it to -1 first skips that save (see its guard clause).
+    currentPageIndex = -1;
+    switchToPage(startIndex);
+  }
+
+  detectBtn.addEventListener('click', () => {
+    if (detectAllToggle.checked){
+      if (pages.length < 2){ alert('Add more than one page first — this runs detection across every loaded page.'); return; }
+      detectAllPages();
+    } else {
+      detectGrid();
+      applyTrim();
+    }
+  });
+
+  resetDetectBtn.addEventListener('click', () => {
+    if (resetAllToggle.checked && pages.length >= 2){
+      if (!confirm('Reset the detected grid on all ' + pages.length + ' pages? This clears every page\'s grid lines, trim boxes, and exclusions — it can\'t be undone.')) return;
+      const startIndex = currentPageIndex;
+      saveCurrentPageState();
+      pages.forEach(p => {
+        p.vLines = [];
+        p.hLines = [];
+        p.trimRects = [];
+        p.excludedCells = [];
+      });
+      currentPageIndex = -1; // skip switchToPage's auto-save — see detectAllPages for why
+      switchToPage(startIndex);
+    } else {
+      vLines = []; hLines = []; trimRects = []; excludedCells = [];
+      renderOverlay();
+      syncActionButtons();
+    }
+  });
+
+  trimToggle.addEventListener('change', () => { if (hLines.length || vLines.length || (rowsInput.value==1 && colsInput.value==1)) applyTrim(); });
+  insetInput.addEventListener('change', () => { if (trimRects.length) applyTrim(); });
+  borderSnapToggle.addEventListener('change', () => { if (trimRects.length) applyTrim(); });
+
+  // ---------- full-resolution ink mask (shared by grid trim + manual smart features) ----------
+  function buildFullMask(){
+    if (fullMask) return fullMask;
+    const off = document.createElement('canvas');
+    off.width = natW; off.height = natH;
+    const octx = off.getContext('2d');
+    octx.drawImage(img, 0, 0);
+    const data = octx.getImageData(0, 0, natW, natH).data;
+    const gray = new Uint8ClampedArray(natW * natH);
+    const hist = new Array(256).fill(0);
+    for (let i = 0, p = 0; i < data.length; i += 4, p++){
+      const g = Math.round(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
+      gray[p] = g; hist[g]++;
+    }
+    const threshold = otsuThreshold(hist, natW*natH);
+    let borderSum = 0, borderCount = 0;
+    for (let x = 0; x < natW; x++){ borderSum += gray[x]; borderSum += gray[(natH-1)*natW + x]; borderCount += 2; }
+    for (let y = 0; y < natH; y++){ borderSum += gray[y*natW]; borderSum += gray[y*natW + (natW-1)]; borderCount += 2; }
+    const bgIsLight = (borderSum/borderCount) > threshold;
+    fullMask = { gray, threshold, bgIsLight, W: natW, H: natH };
+    return fullMask;
+  }
+  function isInk(mask, x, y){
+    const g = mask.gray[y*mask.W + x];
+    return mask.bgIsLight ? (g < mask.threshold) : (g >= mask.threshold);
+  }
+
+  function floodFillBBox(mask, startX, startY, bx0, by0, bx1, by1, maxVisited){
+    bx0 = Math.max(0, Math.floor(bx0)); by0 = Math.max(0, Math.floor(by0));
+    bx1 = Math.min(mask.W, Math.ceil(bx1)); by1 = Math.min(mask.H, Math.ceil(by1));
+    if (startX < bx0 || startX >= bx1 || startY < by0 || startY >= by1) return null;
+    const wantInk = isInk(mask, startX, startY);
+    const bw = bx1 - bx0, bh = by1 - by0;
+    if (bw <= 0 || bh <= 0) return null;
+    const visited = new Uint8Array(bw*bh);
+    const stack = [[startX-bx0, startY-by0]];
+    visited[(startY-by0)*bw + (startX-bx0)] = 1;
+    let minX=startX, maxX=startX, minY=startY, maxY=startY, count=0;
+    while (stack.length){
+      const [lx, ly] = stack.pop();
+      const gx = lx+bx0, gy = ly+by0;
+      count++;
+      if (count > maxVisited) return null;
+      if (gx<minX) minX=gx; if (gx>maxX) maxX=gx;
+      if (gy<minY) minY=gy; if (gy>maxY) maxY=gy;
+      const nbrs = [[lx+1,ly],[lx-1,ly],[lx,ly+1],[lx,ly-1]];
+      for (const [nx,ny] of nbrs){
+        if (nx<0||nx>=bw||ny<0||ny>=bh) continue;
+        if (visited[ny*bw+nx]) continue;
+        const ngx=nx+bx0, ngy=ny+by0;
+        if (isInk(mask,ngx,ngy) !== wantInk) continue;
+        visited[ny*bw+nx]=1;
+        stack.push([nx,ny]);
+      }
+    }
+    return { minX, minY, maxX, maxY, wasInk: wantInk };
+  }
+
+  // Finds the tight content rect enclosing (natX,natY), searching only within boundsRect (natural coords).
+  // Returns {x,y,w,h} in natural coords, or null if nothing reliable was found.
+  function detectContentRect(natX, natY, boundsRect){
+    const mask = buildFullMask();
+    let sx = clamp(Math.round(natX), 0, natW-1);
+    let sy = clamp(Math.round(natY), 0, natH-1);
+
+    // decide whether the click looks like it's on solid content or just grazing a thin line
+    const win = 10;
+    let inkCount = 0, total = 0;
+    for (let yy = Math.max(0,sy-win); yy <= Math.min(natH-1,sy+win); yy++){
+      for (let xx = Math.max(0,sx-win); xx <= Math.min(natW-1,sx+win); xx++){
+        total++; if (isInk(mask,xx,yy)) inkCount++;
+      }
+    }
+    const localDensity = inkCount/total;
+    let startIsInk = isInk(mask, sx, sy);
+    if (startIsInk && localDensity < 0.55){
+      let found = false;
+      outer:
+      for (let r = 1; r <= 12; r++){
+        for (let ddy = -r; ddy <= r; ddy++){
+          for (let ddx = -r; ddx <= r; ddx++){
+            if (Math.max(Math.abs(ddx),Math.abs(ddy)) !== r) continue;
+            const tx = sx+ddx, ty = sy+ddy;
+            if (tx<0||tx>=natW||ty<0||ty>=natH) continue;
+            if (!isInk(mask,tx,ty)){ sx=tx; sy=ty; found=true; break outer; }
+          }
+        }
+      }
+      if (found) startIsInk = false;
+    }
+
+    const bx0 = boundsRect.x, by0 = boundsRect.y, bx1 = boundsRect.x+boundsRect.w, by1 = boundsRect.y+boundsRect.h;
+    const maxVisited = Math.max(4000, boundsRect.w*boundsRect.h);
+    const bbox = floodFillBBox(mask, sx, sy, bx0, by0, bx1, by1, maxVisited);
+    if (!bbox) return null;
+    const touchesEdge = bbox.minX <= bx0+0.5 || bbox.minY <= by0+0.5 || bbox.maxX >= bx1-1.5 || bbox.maxY >= by1-1.5;
+    if (touchesEdge) return null;
+    const pad = startIsInk ? 1 : 4;
+    return {
+      x: bbox.minX - pad, y: bbox.minY - pad,
+      w: (bbox.maxX - bbox.minX) + pad*2,
+      h: (bbox.maxY - bbox.minY) + pad*2
+    };
+  }
+
+  // tries several sample points inside a region and keeps whichever gives the largest
+  // enclosed content rect — avoids getting trapped inside a small doodle-within-the-frame
+  // (a held-up sign, a single eye) instead of the frame itself.
+  function bestContentRect(cell){
+    const pts = [
+      [0.5,0.5], [0.25,0.25], [0.75,0.25], [0.25,0.75], [0.75,0.75],
+      [0.5,0.3], [0.5,0.7], [0.3,0.5], [0.7,0.5]
+    ];
+    let best = null, bestArea = 0;
+    for (const [fx, fy] of pts){
+      const cx = cell.x + cell.w*fx, cy = cell.y + cell.h*fy;
+      const rect = detectContentRect(cx, cy, cell);
+      if (rect){
+        const area = rect.w * rect.h;
+        if (area > bestArea){ bestArea = area; best = rect; }
+      }
+    }
+    // also try a flood-fill-independent direct border scan, and keep whichever is larger —
+    // dense/cluttered artwork traps the flood-fill in small internal pockets, while a
+    // gutter-separated panel with a stray motion arrow in the margin can trip up the direct
+    // scan instead. Neither approach alone is reliable across both styles.
+    const direct = findBorderDirect(cell);
+    const directArea = direct.w * direct.h;
+    if (directArea > bestArea) return direct;
+    return best;
+  }
+
+  // like bestContentRect, but for an arbitrary point + search window rather than a grid cell
+  function bestContentRectNear(cx, cy, boundsRect, jitterFrac){
+    jitterFrac = jitterFrac || 0.12;
+    const jw = boundsRect.w * jitterFrac, jh = boundsRect.h * jitterFrac;
+    const offsets = [[0,0],[-jw,0],[jw,0],[0,-jh],[0,jh],[-jw,-jh],[jw,-jh],[-jw,jh],[jw,jh]];
+    let best = null, bestArea = 0;
+    for (const [ox, oy] of offsets){
+      const rect = detectContentRect(cx+ox, cy+oy, boundsRect);
+      if (rect){
+        const area = rect.w * rect.h;
+        if (area > bestArea){ bestArea = area; best = rect; }
+      }
+    }
+    const direct = findBorderDirect(boundsRect);
+    const directArea = direct.w * direct.h;
+    if (directArea > bestArea) return direct;
+    return best;
+  }
+
+  function rowInkFraction(mask, y, x0, x1){
+    x0 = Math.max(0, Math.round(x0)); x1 = Math.min(mask.W, Math.round(x1));
+    if (x1 <= x0) return 0;
+    let count = 0;
+    for (let x = x0; x < x1; x++) if (isInk(mask, x, y)) count++;
+    return count / (x1 - x0);
+  }
+  function colInkFraction(mask, x, y0, y1){
+    y0 = Math.max(0, Math.round(y0)); y1 = Math.min(mask.H, Math.round(y1));
+    if (y1 <= y0) return 0;
+    let count = 0;
+    for (let y = y0; y < y1; y++) if (isInk(mask, x, y)) count++;
+    return count / (y1 - y0);
+  }
+
+  // Scans inward from each of the cell's own outer edges for the first strong straight
+  // ink line, independent of any flood-fill starting point. This is what actually finds
+  // a thick/rounded-corner drawn border on cluttered artwork, where interior linework
+  // (crowds, hatching, city skylines) creates lots of small enclosed pockets that trap
+  // the flood-fill approach before it ever reaches the true outer border.
+  function findBorderDirect(cell, threshold){
+    threshold = threshold || 0.65;
+    const mask = buildFullMask();
+    const { x, y, w, h } = cell;
+    let top = y, bottom = y + h - 1, left = x, right = x + w - 1;
+    const margin = 0.5;
+    for (let yy = Math.round(y); yy <= Math.round(y + h*margin); yy++){
+      if (rowInkFraction(mask, yy, x, x+w) >= threshold){ top = yy; break; }
+    }
+    for (let yy = Math.round(y+h) - 1; yy >= Math.round(y + h*(1-margin)); yy--){
+      if (rowInkFraction(mask, yy, x, x+w) >= threshold){ bottom = yy; break; }
+    }
+    for (let xx = Math.round(x); xx <= Math.round(x + w*margin); xx++){
+      if (colInkFraction(mask, xx, y, y+h) >= threshold){ left = xx; break; }
+    }
+    for (let xx = Math.round(x+w) - 1; xx >= Math.round(x + w*(1-margin)); xx--){
+      if (colInkFraction(mask, xx, y, y+h) >= threshold){ right = xx; break; }
+    }
+    return { x: left, y: top, w: right-left+1, h: bottom-top+1 };
+  }
+
+  // If a strong straight border line sits inside the given rect (near one of its edges),
+  // crop in to that line instead of whatever the flood fill found — this catches cases where
+  // something (an arrow, a hand) pokes past the drawn border and drags the flood-fill bbox
+  // out past it. Only ever shrinks the rect, never grows it.
+  const BORDER_LINE_THRESHOLD = 0.72;
+  const BORDER_SEARCH_MARGIN = 0.3; // how far inward (as a fraction of that side's own length) we'll look
+  function snapEdgesToBorder(rect){
+    const mask = buildFullMask();
+    let { x, y, w, h } = rect;
+    if (w < 20 || h < 20) return rect;
+
+    // top: scan downward from the current top edge
+    {
+      const limit = y + h * BORDER_SEARCH_MARGIN;
+      for (let yy = Math.round(y); yy <= Math.round(limit); yy++){
+        if (rowInkFraction(mask, yy, x, x+w) >= BORDER_LINE_THRESHOLD){
+          if (yy > y){ h -= (yy - y); y = yy; }
+          break;
+        }
+      }
+    }
+    // bottom: scan upward from the current bottom edge
+    {
+      const limit = (y+h) - h * BORDER_SEARCH_MARGIN;
+      for (let yy = Math.round(y+h) - 1; yy >= Math.round(limit); yy--){
+        if (rowInkFraction(mask, yy, x, x+w) >= BORDER_LINE_THRESHOLD){
+          if (yy < y+h-1) h = yy - y + 1;
+          break;
+        }
+      }
+    }
+    // left: scan rightward from the current left edge
+    {
+      const limit = x + w * BORDER_SEARCH_MARGIN;
+      for (let xx = Math.round(x); xx <= Math.round(limit); xx++){
+        if (colInkFraction(mask, xx, y, y+h) >= BORDER_LINE_THRESHOLD){
+          if (xx > x){ w -= (xx - x); x = xx; }
+          break;
+        }
+      }
+    }
+    // right: scan leftward from the current right edge
+    {
+      const limit = (x+w) - w * BORDER_SEARCH_MARGIN;
+      for (let xx = Math.round(x+w) - 1; xx >= Math.round(limit); xx--){
+        if (colInkFraction(mask, xx, y, y+h) >= BORDER_LINE_THRESHOLD){
+          if (xx < x+w-1) w = xx - x + 1;
+          break;
+        }
+      }
+    }
+    if (w < 10 || h < 10) return rect; // sanity guard, don't collapse the box
+    return { x, y, w, h };
+  }
+
+  function fitAspect(rect, aspect){
+    if (!aspect) return rect;
+    const cx = rect.x + rect.w/2, cy = rect.y + rect.h/2;
+    let w = rect.w, h = rect.h;
+    if (w/h > aspect) h = w/aspect; else w = h*aspect;
+    return { x: cx-w/2, y: cy-h/2, w, h };
+  }
+
+  // ---------- grid trim: refine each coarse cell to its actual content ----------
+  function applyTrim(){
+    if (!trimToggle.checked){
+      trimRects = [];
+      renderOverlay();
+      return;
+    }
+    const cells = gridCropRects();
+    const inset = parseFloat(insetInput.value) || 0;
+    trimRects = cells.map(cell => {
+      let rect = bestContentRect(cell);
+      if (!rect) return null; // fall back to raw cell for this one
+      if (borderSnapToggle.checked) rect = snapEdgesToBorder(rect);
+      rect = { x: rect.x+inset, y: rect.y+inset, w: rect.w-2*inset, h: rect.h-2*inset };
+      if (rect.w < 10 || rect.h < 10) return null;
+      // clamp within cell
+      rect.x = clamp(rect.x, cell.x, cell.x+cell.w-10);
+      rect.y = clamp(rect.y, cell.y, cell.y+cell.h-10);
+      rect.w = Math.min(rect.w, cell.x+cell.w-rect.x);
+      rect.h = Math.min(rect.h, cell.y+cell.h-rect.y);
+      return rect;
+    });
+    renderOverlay();
+  }
+
+  // ---------- manual mode ----------
+  function renderManualOverlay(){
+    manualBoxes.forEach((b, i) => {
+      const el = document.createElement('div');
+      el.className = 'manual-box' + (b.excluded ? ' excluded' : '');
+      positionRect(el, b);
+      const num = document.createElement('div');
+      num.className = 'num';
+      num.textContent = i + 1;
+      el.appendChild(num);
+      const rm = document.createElement('div');
+      rm.className = 'rm';
+      rm.textContent = '×';
+      rm.title = 'Delete this box entirely';
+      rm.addEventListener('pointerdown', e => { e.stopPropagation(); });
+      rm.addEventListener('click', e => {
+        e.stopPropagation();
+        manualBoxes.splice(i, 1);
+        renderOverlay();
+      });
+      el.appendChild(rm);
+
+      const toggle = document.createElement('div');
+      toggle.className = 'box-toggle' + (b.excluded ? ' excluded' : '');
+      toggle.innerHTML = eyeIconSVG(b.excluded);
+      toggle.title = b.excluded ? 'Hidden — click to show this frame again' : 'Click to hide this frame from output';
+      toggle.addEventListener('pointerdown', e => { e.stopPropagation(); });
+      toggle.addEventListener('click', e => {
+        e.stopPropagation();
+        b.excluded = !b.excluded;
+        syncActionButtons();
+        renderOverlay();
+      });
+      el.appendChild(toggle);
+
+      const resizeSE = document.createElement('div');
+      resizeSE.className = 'handle se';
+      resizeSE.style.position = 'absolute';
+      resizeSE.style.right = '-7px';
+      resizeSE.style.bottom = '-7px';
+      resizeSE.style.left = 'auto';
+      resizeSE.style.top = 'auto';
+      resizeSE.style.transform = 'none';
+      el.appendChild(resizeSE);
+
+      const resizeNW = document.createElement('div');
+      resizeNW.className = 'handle nw';
+      resizeNW.style.position = 'absolute';
+      resizeNW.style.left = '-7px';
+      resizeNW.style.top = '-7px';
+      resizeNW.style.right = 'auto';
+      resizeNW.style.bottom = 'auto';
+      resizeNW.style.transform = 'none';
+      el.appendChild(resizeNW);
+
+      makeManualBoxDraggable(el, i);
+      makeManualResizeDraggable(resizeSE, i, 'se');
+      makeManualResizeDraggable(resizeNW, i, 'nw');
+
+      canvasHolder.appendChild(el);
+    });
+    syncActionButtons();
+  }
+
+  function makeManualBoxDraggable(el, index){
+    el.addEventListener('pointerdown', e => {
+      if (e.target !== el) return; // let handles/rm handle themselves
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      let dragIndex = index;
+      if (e.shiftKey){
+        const clone = { ...manualBoxes[index] };
+        manualBoxes.splice(index+1, 0, clone);
+        dragIndex = index+1;
+        renderOverlay();
+      }
+      const startX = e.clientX, startY = e.clientY;
+      const start = { ...manualBoxes[dragIndex] };
+      function move(ev){
+        const dx = toNat(ev.clientX - startX);
+        const dy = toNat(ev.clientY - startY);
+        let x = clamp(start.x + dx, 0, natW - start.w);
+        let y = clamp(start.y + dy, 0, natH - start.h);
+        manualBoxes[dragIndex] = { ...manualBoxes[dragIndex], x, y };
+        renderOverlay();
+      }
+      function up(){
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  function makeManualResizeDraggable(handle, index, corner){
+    corner = corner || 'se';
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      handle.setPointerCapture(e.pointerId);
+      const startX = e.clientX, startY = e.clientY;
+      const start = { ...manualBoxes[index] };
+      function move(ev){
+        const dx = toNat(ev.clientX - startX);
+        const dy = toNat(ev.clientY - startY);
+        let x = start.x, y = start.y, w = start.w, h = start.h;
+        if (corner === 'se'){
+          w = clamp(start.w + dx, 20, natW - start.x);
+          h = manualAspect ? w / manualAspect : clamp(start.h + dy, 20, natH - start.y);
+          if (manualAspect && start.y + h > natH) { h = natH - start.y; w = h * manualAspect; }
+        } else { // nw: opposite corner (start.x+start.w, start.y+start.h) stays fixed
+          const fixedRight = start.x + start.w, fixedBottom = start.y + start.h;
+          w = clamp(start.w - dx, 20, fixedRight);
+          h = manualAspect ? w / manualAspect : clamp(start.h - dy, 20, fixedBottom);
+          if (manualAspect && h > fixedBottom) { h = fixedBottom; w = h * manualAspect; }
+          x = fixedRight - w;
+          y = fixedBottom - h;
+          x = clamp(x, 0, fixedRight - 20);
+          y = clamp(y, 0, fixedBottom - 20);
+        }
+        manualBoxes[index] = { x, y, w, h };
+        renderOverlay();
+      }
+      function up(){
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      }
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  addBoxBtn.addEventListener('click', () => {
+    const w = Math.min(natW * 0.35, natW);
+    const h = manualAspect ? w / manualAspect : natH * 0.3;
+    const x = clamp((natW - w) / 2 + (manualBoxes.length * 20) % (natW*0.2), 0, natW - w);
+    const y = clamp((natH - h) / 2 + (manualBoxes.length * 20) % (natH*0.2), 0, natH - h);
+    manualBoxes.push({ x, y, w, h });
+    renderOverlay();
+  });
+
+  // ---------- smart add: click a frame to auto-detect its bounds ----------
+  smartAddBtn.addEventListener('click', () => {
+    smartAddActive = !smartAddActive;
+    smartAddBtn.classList.toggle('primary', smartAddActive);
+    smartAddBtn.textContent = smartAddActive ? 'Click a frame…' : 'Smart add';
+    if (displayCanvas) displayCanvas.style.cursor = smartAddActive ? 'crosshair' : 'default';
+  });
+
+  function searchWindowAround(cx, cy){
+    const w = Math.min(natW, natW*0.6), h = Math.min(natH, natH*0.6);
+    let x = clamp(cx - w/2, 0, Math.max(0, natW-w));
+    let y = clamp(cy - h/2, 0, Math.max(0, natH-h));
+    return { x, y, w, h };
+  }
+
+  function stageClickHandler(e){
+    if (mode !== 'manual' || !smartAddActive) return;
+    if (e.target !== displayCanvas) return;
+    const rect = displayCanvas.getBoundingClientRect();
+    const dispX = e.clientX - rect.left, dispY = e.clientY - rect.top;
+    const natX = toNat(dispX), natY = toNat(dispY);
+    let box = bestContentRectNear(natX, natY, searchWindowAround(natX, natY));
+    if (box && borderSnapToggle.checked) box = snapEdgesToBorder(box);
+    if (!box){
+      const w = natW*0.25, h = manualAspect ? w/manualAspect : natH*0.2;
+      box = { x: clamp(natX-w/2,0,natW-w), y: clamp(natY-h/2,0,natH-h), w, h };
+    } else {
+      box = fitAspect(box, manualAspect);
+      box.x = clamp(box.x, 0, natW-box.w);
+      box.y = clamp(box.y, 0, natH-box.h);
+    }
+    manualBoxes.push(box);
+    renderOverlay();
+  }
+
+  // ---------- auto-fill along direction ----------
+  autoFillBtn.addEventListener('click', () => {
+    if (manualBoxes.length < 2){
+      alert('Add at least two boxes first (place them over two consecutive frames), then auto-fill will infer the rest.');
+      return;
+    }
+    const a = manualBoxes[manualBoxes.length-2], b = manualBoxes[manualBoxes.length-1];
+    const acx = a.x+a.w/2, acy = a.y+a.h/2, bcx = b.x+b.w/2, bcy = b.y+b.h/2;
+    const dx = bcx-acx, dy = bcy-acy;
+    if (Math.abs(dx) < 2 && Math.abs(dy) < 2){
+      alert('The last two boxes are on top of each other — space them over two different frames first.');
+      return;
+    }
+    const w = (a.w+b.w)/2, h = (a.h+b.h)/2;
+
+    function iou(r1, r2){
+      const ix = Math.max(r1.x, r2.x), iy = Math.max(r1.y, r2.y);
+      const ax = Math.min(r1.x+r1.w, r2.x+r2.w), ay = Math.min(r1.y+r1.h, r2.y+r2.h);
+      const iw = Math.max(0, ax-ix), ih = Math.max(0, ay-iy);
+      const inter = iw*ih;
+      if (inter <= 0) return 0;
+      return inter / (r1.w*r1.h + r2.w*r2.h - inter);
+    }
+    function overlapsAny(r, list){ return list.some(o => iou(r,o) > 0.4); }
+    function refine(cx, cy){
+      const raw = { x: clamp(cx-w/2,0,Math.max(0,natW-w)), y: clamp(cy-h/2,0,Math.max(0,natH-h)), w, h };
+      const detected = bestContentRectNear(cx, cy, searchWindowAround(cx,cy));
+      if (!detected) return raw;
+      return fitAspect(borderSnapToggle.checked ? snapEdgesToBorder(detected) : detected, manualAspect);
+    }
+
+    const forward = [];
+    let cx = bcx+dx, cy = bcy+dy, guard = 0;
+    while (cx+w/2 > 0 && cx-w/2 < natW && cy+h/2 > 0 && cy-h/2 < natH && guard < 60){
+      guard++;
+      const rect = refine(cx, cy);
+      if (!overlapsAny(rect, manualBoxes.concat(forward))) forward.push(rect);
+      cx += dx; cy += dy;
+    }
+    const backward = [];
+    cx = acx-dx; cy = acy-dy; guard = 0;
+    while (cx+w/2 > 0 && cx-w/2 < natW && cy+h/2 > 0 && cy-h/2 < natH && guard < 60){
+      guard++;
+      const rect = refine(cx, cy);
+      if (!overlapsAny(rect, manualBoxes.concat(forward).concat(backward))) backward.push(rect);
+      cx -= dx; cy -= dy;
+    }
+    manualBoxes = backward.reverse().concat(manualBoxes).concat(forward);
+    renderOverlay();
+  });
+
+  aspectPresets.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      aspectPresets.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      manualAspect = btn.dataset.r === 'free' ? null : parseFloat(btn.dataset.r);
+    });
+  });
+
+  // ---------- mode switching ----------
+  modeGridBtn.addEventListener('click', () => setMode('grid'));
+  modeManualBtn.addEventListener('click', () => setMode('manual'));
+  function setMode(m){
+    mode = m;
+    modeGridBtn.classList.toggle('active', m === 'grid');
+    modeManualBtn.classList.toggle('active', m === 'manual');
+    gridControls.style.display = m === 'grid' ? 'block' : 'none';
+    manualControls.style.display = m === 'manual' ? 'block' : 'none';
+    exportBtn.disabled = m === 'grid' ? (vLines.length === 0 && hLines.length === 0 && !(rowsInput.value==1 && colsInput.value==1)) : manualBoxes.length === 0;
+    processBtn.disabled = exportBtn.disabled;
+    sendMushyBtn.disabled = exportBtn.disabled;
+    if (m !== 'manual'){
+      smartAddActive = false;
+      smartAddBtn.classList.remove('primary');
+      smartAddBtn.textContent = 'Smart add';
+    }
+    renderOverlay();
+  }
+
+  // ---------- export ----------
+  function computeHasCrops(){
+    if (mode === 'grid'){
+      const rows = parseInt(rowsInput.value) || 0, cols = parseInt(colsInput.value) || 0;
+      const hasGrid = !(vLines.length === 0 && hLines.length === 0 && !(rows === 1 && cols === 1));
+      if (!hasGrid) return false;
+      return computeCurrentCrops().length > 0;
+    }
+    return manualBoxes.length > 0;
+  }
+
+  function syncActionButtons(){
+    const has = computeHasCrops();
+    exportBtn.disabled = !has;
+    processBtn.disabled = !has;
+    sendMushyBtn.disabled = !has;
+    updateNamePreview();
+  }
+
+  function computeCurrentCrops(){
+    return computeCurrentCropsIndexed().map(o => o.rect);
+  }
+
+  // like computeCurrentCrops, but keeps each rect's source index/mode so a frame can be
+  // traced back to (and excluded/removed from) the cell or box it came from
+  function computeCurrentCropsIndexed(){
+    if (mode === 'grid'){
+      return finalGridRects()
+        .map((r, i) => ({ rect: r, sourceIndex: i, sourceMode: 'grid' }))
+        .filter(o => !excludedCells[o.sourceIndex]);
+    }
+    return manualBoxes
+      .map((b, i) => ({ rect: b, sourceIndex: i, sourceMode: 'manual' }))
+      .filter(o => !o.rect.excluded);
+  }
+
+  function cropToCanvas(r, targetH){
+    const c = document.createElement('canvas');
+    let outW = Math.round(r.w), outH = Math.round(r.h);
+    if (targetH){
+      outH = Math.round(targetH);
+      outW = Math.round(r.w * (outH / r.h));
+    }
+    c.width = outW;
+    c.height = outH;
+    const cctx = c.getContext('2d');
+    cctx.imageSmoothingEnabled = true;
+    cctx.imageSmoothingQuality = 'high';
+    cctx.drawImage(img, r.x, r.y, r.w, r.h, 0, 0, outW, outH);
+    return c;
+  }
+
+  processBtn.addEventListener('click', async () => {
+    processBtn.disabled = true;
+    processBtn.textContent = 'Processing…';
+    try {
+      const crops = computeCurrentCropsIndexed();
+      if (!crops.length){
+        alert('Nothing to process yet — detect a grid or add crop boxes first.');
+        return;
+      }
+      const targetH = targetHeightForExport();
+      const frames = [];
+      for (let i = 0; i < crops.length; i++){
+        const c = cropToCanvas(crops[i].rect, targetH);
+        const blob = await new Promise(res => c.toBlob(res, currentMime(), currentQuality()));
+        frames.push({ url: URL.createObjectURL(blob), blob, w: c.width, h: c.height, sourceIndex: crops[i].sourceIndex, sourceMode: crops[i].sourceMode });
+      }
+      processedFrames.forEach(f => { if (f.url) URL.revokeObjectURL(f.url); });
+      processedFrames = frames;
+      processedIndex = 0;
+      if (currentPageIndex >= 0) pages[currentPageIndex].processed = processedFrames;
+      viewerMode = 'processed';
+      updateViewerUI();
+      sendMushyBtn.disabled = false;
+    } finally {
+      processBtn.disabled = false;
+      processBtn.textContent = 'Process sheet → preview';
+    }
+  });
+
+  // Snapshots every page's already-processed frames (built by the loop just above) into
+  // the shape the export would actually produce: one flat sequence if continuous numbering
+  // is on, or page-by-page groups if each page numbers its own frames from 1.
+  function buildCombinedPreview(){
+    const counts = pages.map(p => (p.processed || []).length);
+    const groups = pages.map((p, pi) => ({
+      pageName: p.name || ('Page ' + (pi+1)),
+      frames: (p.processed || []).map((f, i) => ({
+        url: f.url, w: f.w, h: f.h,
+        fname: exportFileName(pi, i+1, counts)
+      }))
+    }));
+    return {
+      continuous: continuousNumberToggle.checked,
+      groups,
+      totalCount: counts.reduce((a,b) => a+b, 0)
+    };
+  }
+
+  async function processAllPages(triggerBtn){
+    if (pages.length < 2){
+      alert('Add more than one page first — this processes every loaded page at once.');
+      return;
+    }
+    const originalLabel = triggerBtn.textContent;
+    processAllBtn.disabled = true;
+    previewExportBtn.disabled = true;
+    triggerBtn.textContent = 'Processing all…';
+    try {
+      const targetH = targetHeightForExport();
+      const startIndex = currentPageIndex;
+      saveCurrentPageState();
+      for (let i = 0; i < pages.length; i++){
+        const p = pages[i];
+        img = p.img; natW = p.natW; natH = p.natH;
+        content = { ...p.content };
+        vLines = p.vLines.slice();
+        hLines = p.hLines.slice();
+        trimRects = p.trimRects.slice();
+        excludedCells = p.excludedCells ? p.excludedCells.slice() : [];
+        manualBoxes = p.manualBoxes.map(b => ({ ...b }));
+
+        const crops = computeCurrentCropsIndexed();
+        const frames = [];
+        for (let f = 0; f < crops.length; f++){
+          const c = cropToCanvas(crops[f].rect, targetH);
+          const blob = await new Promise(res => c.toBlob(res, currentMime(), currentQuality()));
+          frames.push({ url: URL.createObjectURL(blob), blob, w: c.width, h: c.height, sourceIndex: crops[f].sourceIndex, sourceMode: crops[f].sourceMode });
+        }
+        (p.processed || []).forEach(f => { if (f.url) URL.revokeObjectURL(f.url); });
+        p.processed = frames;
+      }
+      currentPageIndex = -1; // same reasoning as detectAllBtn — skip switchToPage's auto-save
+      switchToPage(startIndex);
+      processedFrames = pages[startIndex].processed;
+      processedIndex = 0;
+      combinedPreview = buildCombinedPreview();
+      viewerMode = 'export';
+      updateViewerUI();
+      syncActionButtons();
+      sendMushyBtn.disabled = false;
+    } finally {
+      processAllBtn.disabled = false;
+      previewExportBtn.disabled = false;
+      triggerBtn.textContent = originalLabel;
+    }
+  }
+
+  processAllBtn.addEventListener('click', () => processAllPages(processAllBtn));
+  previewExportBtn.addEventListener('click', () => processAllPages(previewExportBtn));
+
+  // Builds the export output according to the chosen zip layout:
+  //  - "folders": one zip, each page in its own subfolder (today's original behavior)
+  //  - "flat":    one zip, every frame at the root (collisions disambiguated by page name)
+  //  - "perpage": one separate zip file per page
+  // Returns { zips: [{zipName, blob}], thumbData } — always at least one zip.
+  async function buildFramesOutput(){
+    const targetH = targetHeightForExport();
+    const thumbData = [];
+    const startIndex = currentPageIndex;
+    saveCurrentPageState();
+    const pageCounts = getPageFrameCounts();
+
+    const multi = pages.length > 1;
+    const zipMode = multi ? zipModeSelect.value : 'folders';
+    const pageList = pages.length ? pages : [{ name: 'frame', img, natW, natH, content, vLines, hLines, trimRects, manualBoxes, excludedCells }];
+
+    async function renderPageFrames(p, pi){
+      img = p.img; natW = p.natW; natH = p.natH;
+      content = { ...p.content };
+      vLines = p.vLines.slice();
+      hLines = p.hLines.slice();
+      trimRects = p.trimRects.slice();
+      excludedCells = p.excludedCells ? p.excludedCells.slice() : [];
+      manualBoxes = p.manualBoxes.map(b => ({ ...b }));
+      const crops = computeCurrentCrops();
+      const out = [];
+      for (let i = 0; i < crops.length; i++){
+        const c = cropToCanvas(crops[i], targetH);
+        const blob = await new Promise(res => c.toBlob(res, currentMime(), currentQuality()));
+        out.push({ fname: exportFileName(pi, i+1, pageCounts), blob });
+      }
+      return out;
+    }
+
+    const zips = [];
+
+    if (zipMode === 'perpage'){
+      const usedZipNames = new Set();
+      for (let pi = 0; pi < pageList.length; pi++){
+        const p = pageList[pi];
+        const frames = await renderPageFrames(p, pi);
+        const zip = new JSZip();
+        let base = (p.name || 'page' + String(pi+1).padStart(2,'0')).replace(/[\\/:*?"<>|]/g, '_');
+        let candidate = base, n = 2;
+        while (usedZipNames.has(candidate)) candidate = base + '_' + (n++);
+        usedZipNames.add(candidate);
+        frames.forEach(f => {
+          zip.file(f.fname, f.blob);
+          thumbData.push({ url: URL.createObjectURL(f.blob), name: candidate + '.zip/' + f.fname });
+        });
+        const zipBlob = await zip.generateAsync({ type: 'blob' });
+        zips.push({ zipName: candidate + '.zip', blob: zipBlob });
+      }
+    } else {
+      const zip = new JSZip();
+      const usedEntryNames = new Set();
+      for (let pi = 0; pi < pageList.length; pi++){
+        const p = pageList[pi];
+        const frames = await renderPageFrames(p, pi);
+        let folder = '';
+        if (zipMode === 'folders' && multi){
+          let base = (p.name || 'page' + String(pi+1).padStart(2,'0')).replace(/[\\/:*?"<>|]/g, '_');
+          let candidate = base, n = 2;
+          while (usedEntryNames.has(candidate)) candidate = base + '_' + (n++);
+          usedEntryNames.add(candidate);
+          folder = candidate + '/';
+        }
+        frames.forEach(f => {
+          let entryName = folder + f.fname;
+          if (zipMode === 'flat' && multi){
+            // per-page numbering can collide once folders are removed — disambiguate, don't overwrite
+            let candidate = entryName, n2 = 2;
+            while (usedEntryNames.has(candidate)){
+              const dot = entryName.lastIndexOf('.');
+              candidate = entryName.slice(0, dot) + '_' + (n2++) + entryName.slice(dot);
+            }
+            usedEntryNames.add(candidate);
+            entryName = candidate;
+          }
+          zip.file(entryName, f.blob);
+          thumbData.push({ url: URL.createObjectURL(f.blob), name: entryName });
+        });
+      }
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      zips.push({ zipName: 'frames.zip', blob: zipBlob });
+    }
+
+    if (pages.length && startIndex >= 0){
+      const cur = pages[startIndex];
+      img = cur.img; natW = cur.natW; natH = cur.natH;
+      content = { ...cur.content };
+      vLines = cur.vLines.slice();
+      hLines = cur.hLines.slice();
+      trimRects = cur.trimRects.slice();
+      excludedCells = cur.excludedCells ? cur.excludedCells.slice() : [];
+      manualBoxes = cur.manualBoxes.map(b => ({ ...b }));
+    }
+
+    return { zips, thumbData };
+  }
+
+  async function downloadZips(zips){
+    for (let i = 0; i < zips.length; i++){
+      const { zipName, blob } = zips[i];
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = zipName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      if (i < zips.length - 1) await new Promise(r => setTimeout(r, 350)); // avoid browser popup-blocking rapid downloads
+    }
+  }
+
+  exportBtn.addEventListener('click', async () => {
+    exportBtn.disabled = true;
+    exportBtn.textContent = 'Exporting…';
+    try {
+      const { zips, thumbData } = await buildFramesOutput();
+      await downloadZips(zips);
+
+      thumbGrid.innerHTML = '';
+      thumbsTitle.textContent = '// ' + thumbData.length + ' frames exported'
+        + (zips.length > 1 ? ' across ' + zips.length + ' zip files' : '');
+      thumbData.forEach(t => {
+        const div = document.createElement('div');
+        div.className = 'thumb';
+        div.innerHTML = '<img src="' + t.url + '"><div class="cap">' + t.name + '</div>';
+        thumbGrid.appendChild(div);
+      });
+      thumbs.style.display = 'block';
+    } finally {
+      exportBtn.disabled = false;
+      exportBtn.textContent = pages.length > 1 ? 'Export all frames (.zip)' : 'Export frames (.zip)';
+    }
+  });
+
+  // Same per-page rendering as buildFramesOutput, but returns a flat, unzipped list —
+  // used when embedded in Mushy Edit, which can take real File/Blob objects directly
+  // and skip the zip round-trip entirely.
+  async function buildFlatFileList(){
+    const targetH = targetHeightForExport();
+    const startIndex = currentPageIndex;
+    saveCurrentPageState();
+    const pageCounts = getPageFrameCounts();
+    const pageList = pages.length ? pages : [{ name: 'frame', img, natW, natH, content, vLines, hLines, trimRects, manualBoxes, excludedCells }];
+    const usedNames = new Set();
+    const out = [];
+
+    for (let pi = 0; pi < pageList.length; pi++){
+      const p = pageList[pi];
+      img = p.img; natW = p.natW; natH = p.natH;
+      content = { ...p.content };
+      vLines = p.vLines.slice();
+      hLines = p.hLines.slice();
+      trimRects = p.trimRects.slice();
+      excludedCells = p.excludedCells ? p.excludedCells.slice() : [];
+      manualBoxes = p.manualBoxes.map(b => ({ ...b }));
+
+      const crops = computeCurrentCrops();
+      for (let i = 0; i < crops.length; i++){
+        const c = cropToCanvas(crops[i], targetH);
+        const blob = await new Promise(res => c.toBlob(res, currentMime(), currentQuality()));
+        let name = exportFileName(pi, i+1, pageCounts);
+        if (usedNames.has(name)){
+          const dot = name.lastIndexOf('.');
+          let n2 = 2, candidate;
+          do { candidate = name.slice(0,dot) + '_' + (n2++) + name.slice(dot); } while (usedNames.has(candidate));
+          name = candidate;
+        }
+        usedNames.add(name);
+        out.push({ name, blob });
+      }
+    }
+
+    if (pages.length && startIndex >= 0){
+      const cur = pages[startIndex];
+      img = cur.img; natW = cur.natW; natH = cur.natH;
+      content = { ...cur.content };
+      vLines = cur.vLines.slice();
+      hLines = cur.hLines.slice();
+      trimRects = cur.trimRects.slice();
+      excludedCells = cur.excludedCells ? cur.excludedCells.slice() : [];
+      manualBoxes = cur.manualBoxes.map(b => ({ ...b }));
+    }
+    return out;
+  }
+
+  // ---------- send to Mushy Edit ----------
+  if (embedded){
+    sendMushyBtn.textContent = 'Insert into Mushy Edit';
+    previewMushyBtn.style.display = 'none'; // the mockup preview is moot once actually embedded
+  }
+
+  sendMushyBtn.addEventListener('click', async () => {
+    sendMushyBtn.disabled = true;
+    sendMushyBtn.textContent = embedded ? 'Inserting…' : 'Preparing…';
+    try {
+      if (embedded){
+        const files = await buildFlatFileList();
+        window.parent.postMessage({ type: 'frameSplitterExport', files }, location.origin);
+        return;
+      }
+      const { zips } = await buildFramesOutput();
+      await downloadZips(zips);
+
+      let mushyUrl = '';
+      try { mushyUrl = localStorage.getItem('mushyEditUrl') || ''; } catch (e) {}
+      const zipWord = zips.length > 1 ? zips.length + ' zip files are' : 'frames.zip is';
+      const input = prompt(
+        zipWord + ' downloading. Drop ' + (zips.length > 1 ? 'them' : 'it') + ' onto the Mushy Edit import screen to bring these in as boards.\n\nWant this button to also open Mushy Edit in a new tab next time? Enter its URL (leave blank to skip):',
+        mushyUrl
+      );
+      if (input !== null){
+        mushyUrl = input.trim();
+        try { localStorage.setItem('mushyEditUrl', mushyUrl); } catch (e) {}
+      }
+      if (mushyUrl) window.open(mushyUrl, '_blank');
+    } finally {
+      sendMushyBtn.disabled = false;
+      sendMushyBtn.textContent = embedded ? 'Insert into Mushy Edit' : 'Send to Mushy Edit';
+    }
+  });
+
+  // ---------- preview: what this looks like integrated into Mushy Edit ----------
+  previewMushyBtn.addEventListener('click', () => {
+    const overlay = document.createElement('div');
+    overlay.className = 'mushy-modal-overlay';
+    const framesForPreview = processedFrames.length ? processedFrames : null;
+
+    const slotRow = framesForPreview
+      ? framesForPreview.map((f, i) =>
+          '<div class="mm-slot"><img src="' + f.url + '"><div class="mm-num">board ' + (i+1) + '</div></div>'
+        ).join('')
+      : '<div style="font-family:ui-monospace,monospace; font-size:11px; color:#5b6472; padding:6px;">Click "Process sheet → preview" first to see your actual frames staged here.</div>';
+
+    overlay.innerHTML =
+      '<div class="mushy-mock">' +
+        '<div class="mm-header">' +
+          '<h1><span class="dot">▍</span> Mushy Edit</h1>' +
+          '<button class="mm-close" id="mmClose">Close preview ×</button>' +
+        '</div>' +
+        '<div class="mm-body">' +
+          '<div class="mm-note">This is a mockup of the intended flow, styled after Mushy Edit\'s real header/import screen — nothing is actually sent to Mushy Edit from here yet. It shows what dropping a split sheet into its import step could look like.</div>' +
+          '<div class="mm-label">Incoming — split from your storyboard sheet</div>' +
+          '<div class="mm-slot-row">' + slotRow + '</div>' +
+          '<button class="mm-cta" id="mmInsert">Insert ' + (framesForPreview ? framesForPreview.length : 'N') + ' boards →</button>' +
+          '<button class="mm-ghost" id="mmCancel">Cancel</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(overlay);
+    overlay.querySelector('#mmClose').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#mmCancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#mmInsert').addEventListener('click', () => {
+      alert('In the real integration, this is where these boards would land directly in your Mushy Edit timeline — no zip, no drag-and-drop. That part isn\'t wired up yet; today\'s working bridge is "Send to Mushy Edit" (downloads frames.zip to drop into the existing import screen).');
+    });
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  });
+
+  function finalGridRects(){
+    const cells = gridCropRects();
+    if (!trimToggle.checked || trimRects.length !== cells.length) return cells;
+    return cells.map((cell, i) => trimRects[i] || cell);
+  }
+
+  function gridCropRects(){
+    const rowBounds = [content.y, ...hLines, content.y + content.h];
+    const colBounds = [content.x, ...vLines, content.x + content.w];
+    const rects = [];
+    for (let r = 0; r < rowBounds.length - 1; r++){
+      for (let c = 0; c < colBounds.length - 1; c++){
+        rects.push({
+          x: colBounds[c], y: rowBounds[r],
+          w: colBounds[c+1] - colBounds[c], h: rowBounds[r+1] - rowBounds[r]
+        });
+      }
+    }
+    return rects;
+  }
+
+  // ---------- reset ----------
+  resetBtn.addEventListener('click', () => {
+    pages = [];
+    currentPageIndex = -1;
+    img = null;
+    manualBoxes = [];
+    vLines = []; hLines = []; trimRects = []; excludedCells = [];
+    fullMask = null;
+    processedFrames.forEach(f => { if (f.url) URL.revokeObjectURL(f.url); });
+    processedFrames = [];
+    processedIndex = 0;
+    viewerMode = 'original';
+    combinedPreview = null;
+    smartAddActive = false;
+    smartAddBtn.classList.remove('primary');
+    smartAddBtn.textContent = 'Smart add';
+    controls.classList.add('disabled');
+    stageContent.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'empty-stage';
+    empty.textContent = 'Add a storyboard image above to get started.';
+    stageContent.appendChild(empty);
+    renderPageStrip();
+    thumbs.style.display = 'none';
+    thumbGrid.innerHTML = '';
+    fileInput.value = '';
+  });
+
+  window.addEventListener('resize', () => { if (img) buildStage(); });
+  renderPageStrip();
+  updateNamePreview();
+
+  // ---------- embedded mode: receive files from the parent (Mushy Edit) ----------
+  if (embedded){
+    window.addEventListener('message', (e) => {
+      if (e.origin !== location.origin) return;
+      if (e.data && e.data.type === 'frameSplitterInit' && Array.isArray(e.data.files) && e.data.files.length){
+        addFiles(e.data.files);
+      }
+    });
+    window.parent.postMessage({ type: 'frameSplitterReady' }, location.origin);
+  }
+})();
+</script>
+</body>
+</html>
