@@ -302,6 +302,20 @@
     background: rgba(217,164,65,0.03);
     box-sizing: border-box;
   }
+  .smart-add-drag {
+    position: absolute;
+    border: 2px dashed var(--accent);
+    background: rgba(217,164,65,0.12);
+    box-sizing: border-box;
+    pointer-events: none;
+    z-index: 7;
+  }
+  /* Draw tool: let clicks/drags pass through existing boxes to the canvas underneath,
+     so a new box can be drawn overlapping or right next to one that already exists. */
+  .canvas-holder.tool-draw .manual-box { pointer-events: none; }
+  .manual-box.selected {
+    border-color: #ffe600;
+  }
   .handle {
     position: absolute;
     width: 14px;
@@ -746,6 +760,10 @@
         </div>
 
         <div id="manualControls" style="display:none;">
+          <div class="mode-switch" id="manualToolSwitch">
+            <button id="drawToolBtn" class="active">Draw crop</button>
+            <button id="selectToolBtn">Select / Move</button>
+          </div>
           <div class="field">
             <label>Aspect ratio</label>
             <div class="aspect-presets" id="aspectPresets">
@@ -755,11 +773,6 @@
               <button data-r="1">1:1</button>
               <button data-r="free">Free</button>
             </div>
-          </div>
-          <div class="btn-row">
-            <button class="btn primary" id="addBoxBtn">Add box</button>
-            <button class="btn" id="smartAddBtn">Smart add</button>
-            <button class="btn" id="autoFillBtn">Auto-fill row</button>
           </div>
         </div>
 
@@ -878,13 +891,20 @@
   let vLines = []; // length cols-1
   let hLines = []; // length rows-1
 
-  // manual boxes: {x,y,w,h} in NATURAL coords
+  // manual boxes: {id,x,y,w,h} in NATURAL coords
   let manualBoxes = [];
   let manualAspect = 16/9; // null = free
-  let smartAddActive = false;
+  let manualTool = 'draw'; // 'draw' | 'select'
+  let nextBoxId = 1;
+  let selectedIds = new Set();
 
   // trim rects: parallel to gridCropRects() order, natural coords, or null entries if not computed
   let trimRects = [];
+
+  // ---------- undo/redo (current page's editable geometry only — resets on page switch) ----------
+  let history = [];
+  let historyIndex = -1;
+  let restoringHistory = false;
 
   // indices of grid cells the user has excluded from output (still shown, dimmed, in the overlay)
   let excludedCells = [];
@@ -918,13 +938,12 @@
   const modeManualBtn = document.getElementById('modeManualBtn');
   const gridControls = document.getElementById('gridControls');
   const manualControls = document.getElementById('manualControls');
-  const addBoxBtn = document.getElementById('addBoxBtn');
+  const drawToolBtn = document.getElementById('drawToolBtn');
+  const selectToolBtn = document.getElementById('selectToolBtn');
   const aspectPresets = document.getElementById('aspectPresets');
   const trimToggle = document.getElementById('trimToggle');
   const aspectSnapToggle = document.getElementById('aspectSnapToggle');
   const insetInput = document.getElementById('insetInput');
-  const smartAddBtn = document.getElementById('smartAddBtn');
-  const autoFillBtn = document.getElementById('autoFillBtn');
   const resPreset = document.getElementById('resPreset');
   const customResField = document.getElementById('customResField');
   const customResInput = document.getElementById('customResInput');
@@ -1080,7 +1099,7 @@
     }
     controls.classList.remove('disabled');
     renderPageStrip();
-    if (wasEmpty) switchToPage(0);
+    if (wasEmpty) { switchToPage(0); resetHistory(); }
   }
 
   function saveCurrentPageState(){
@@ -1109,6 +1128,7 @@
     trimRects = p.trimRects.slice();
     excludedCells = p.excludedCells ? p.excludedCells.slice() : [];
     manualBoxes = p.manualBoxes.map(b => ({ ...b }));
+    selectedIds.clear();
     rowsInput.value = p.rows;
     colsInput.value = p.cols;
     fullMask = null;
@@ -1120,6 +1140,78 @@
     thumbGrid.innerHTML = '';
     renderPageStrip();
   }
+
+  // Snapshots only the current page's editable geometry — not which page is active,
+  // not tool/selection state, not settings like border-snap. History is intentionally
+  // per-page: resetHistory() is called wherever the live globals start representing a
+  // different page (switching pages, loading new ones, bulk detect/reset-all), so undo
+  // never tries to reach across a page boundary.
+  function pageSnapshot(){
+    return {
+      content: { ...content },
+      vLines: vLines.slice(),
+      hLines: hLines.slice(),
+      trimRects: trimRects.map(r => r ? { ...r } : r),
+      excludedCells: excludedCells.slice(),
+      manualBoxes: manualBoxes.map(b => ({ ...b })),
+      manualAspect
+    };
+  }
+
+  function restoreSnapshot(s){
+    content = { ...s.content };
+    vLines = s.vLines.slice();
+    hLines = s.hLines.slice();
+    trimRects = s.trimRects.map(r => r ? { ...r } : r);
+    excludedCells = s.excludedCells.slice();
+    manualBoxes = s.manualBoxes.map(b => ({ ...b }));
+    manualAspect = s.manualAspect;
+    selectedIds.clear();
+    aspectPresets.querySelectorAll('button').forEach(btn => {
+      const r = btn.dataset.r === 'free' ? null : parseFloat(btn.dataset.r);
+      btn.classList.toggle('active', r === manualAspect);
+    });
+    renderOverlay();
+    syncActionButtons();
+  }
+
+  function resetHistory(){
+    history = [pageSnapshot()];
+    historyIndex = 0;
+  }
+
+  function pushHistory(){
+    if (restoringHistory) return;
+    history = history.slice(0, historyIndex + 1);
+    history.push(pageSnapshot());
+    if (history.length > 100) history.shift();
+    historyIndex = history.length - 1;
+  }
+
+  function undo(){
+    if (historyIndex <= 0) return;
+    historyIndex--;
+    restoringHistory = true;
+    restoreSnapshot(history[historyIndex]);
+    restoringHistory = false;
+  }
+
+  function redo(){
+    if (historyIndex >= history.length - 1) return;
+    historyIndex++;
+    restoringHistory = true;
+    restoreSnapshot(history[historyIndex]);
+    restoringHistory = false;
+  }
+
+  window.addEventListener('keydown', e => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    if (e.key.toLowerCase() !== 'z') return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (document.activeElement && document.activeElement.isContentEditable)) return;
+    e.preventDefault();
+    if (e.shiftKey) redo(); else undo();
+  });
 
   function removePage(idx){
     const wasCurrent = idx === currentPageIndex;
@@ -1143,6 +1235,7 @@
     }
     if (wasCurrent){
       switchToPage(Math.min(idx, pages.length - 1));
+      resetHistory();
     } else {
       if (idx < currentPageIndex) currentPageIndex--;
       renderPageStrip();
@@ -1172,7 +1265,7 @@
       rm.title = 'Remove this page';
       rm.addEventListener('click', ev => { ev.stopPropagation(); removePage(i); });
       el.appendChild(rm);
-      el.addEventListener('click', () => { if (i !== currentPageIndex) switchToPage(i); });
+      el.addEventListener('click', () => { if (i !== currentPageIndex) { switchToPage(i); resetHistory(); } });
       pageStrip.appendChild(el);
     });
     const addEl = document.createElement('div');
@@ -1221,7 +1314,7 @@
     ctx = displayCanvas.getContext('2d');
     ctx.drawImage(img, 0, 0, dispW, dispH);
 
-    displayCanvas.addEventListener('click', stageClickHandler);
+    displayCanvas.addEventListener('pointerdown', stagePointerDownHandler);
     canvasHolder.appendChild(displayCanvas);
     stageContent.appendChild(canvasHolder);
 
@@ -1415,6 +1508,7 @@
             excludedCells[idx] = !excludedCells[idx];
             syncActionButtons();
             renderOverlay();
+            pushHistory();
           });
           canvasHolder.appendChild(toggle);
         }
@@ -1496,6 +1590,7 @@
       function up(){
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
+        pushHistory();
       }
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
@@ -1519,6 +1614,7 @@
         el.releasePointerCapture(e.pointerId);
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
+        pushHistory();
       }
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
@@ -1566,6 +1662,7 @@
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
         if (trimToggle.checked) applyTrim();
+        pushHistory();
       }
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
@@ -1596,6 +1693,7 @@
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
         if (trimToggle.checked) applyTrim();
+        pushHistory();
       }
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
@@ -1626,6 +1724,7 @@
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
         if (trimToggle.checked) applyTrim();
+        pushHistory();
       }
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
@@ -1750,8 +1849,6 @@
     return splits;
   }
 
-  detectBtn.addEventListener('click', () => { detectGrid(); applyTrim(); });
-
   detectAllToggle.addEventListener('change', () => {
     detectBtn.textContent = detectAllToggle.checked ? 'Detect all' : 'Detect page';
   });
@@ -1783,6 +1880,7 @@
     // just-computed results. Setting it to -1 first skips that save (see its guard clause).
     currentPageIndex = -1;
     switchToPage(startIndex);
+    resetHistory(); // bulk, multi-page op — not covered by single-page undo, fresh baseline
   }
 
   detectBtn.addEventListener('click', () => {
@@ -1792,6 +1890,7 @@
     } else {
       detectGrid();
       applyTrim();
+      pushHistory();
     }
   });
 
@@ -1808,16 +1907,18 @@
       });
       currentPageIndex = -1; // skip switchToPage's auto-save — see detectAllPages for why
       switchToPage(startIndex);
+      resetHistory(); // bulk, multi-page op — already explicitly "can't be undone" above
     } else {
       vLines = []; hLines = []; trimRects = []; excludedCells = [];
       renderOverlay();
       syncActionButtons();
+      pushHistory();
     }
   });
 
-  trimToggle.addEventListener('change', () => { if (hLines.length || vLines.length || (rowsInput.value==1 && colsInput.value==1)) applyTrim(); });
-  insetInput.addEventListener('change', () => { if (trimRects.length) applyTrim(); });
-  borderSnapToggle.addEventListener('change', () => { if (trimRects.length) applyTrim(); });
+  trimToggle.addEventListener('change', () => { if (hLines.length || vLines.length || (rowsInput.value==1 && colsInput.value==1)) { applyTrim(); pushHistory(); } });
+  insetInput.addEventListener('change', () => { if (trimRects.length) { applyTrim(); pushHistory(); } });
+  borderSnapToggle.addEventListener('change', () => { if (trimRects.length) { applyTrim(); pushHistory(); } });
 
   // ---------- full-resolution ink mask (shared by grid trim + manual smart features) ----------
   function buildFullMask(){
@@ -1964,9 +2065,9 @@
         if (area > bestArea){ bestArea = area; best = rect; }
       }
     }
-    const direct = findBorderDirect(boundsRect);
-    const directArea = direct.w * direct.h;
-    if (directArea > bestArea) return direct;
+    const direct = findBorderDirect(boundsRect, undefined, true);
+    const directArea = direct ? direct.w * direct.h : 0;
+    if (direct && directArea > bestArea) return direct;
     return best;
   }
 
@@ -1990,24 +2091,34 @@
   // a thick/rounded-corner drawn border on cluttered artwork, where interior linework
   // (crowds, hatching, city skylines) creates lots of small enclosed pockets that trap
   // the flood-fill approach before it ever reaches the true outer border.
-  function findBorderDirect(cell, threshold){
+  // `strict`: when true, require a real ink line on ALL FOUR sides, else return null
+  // instead of the cell's own unshrunk bounds. Grid mode's cell trim (bestContentRect)
+  // deliberately leaves this off — there, "no line found on this side" correctly means
+  // "don't shrink this side," since the cell bounds are already a good crop. Manual
+  // smart-add's click-to-detect (bestContentRectNear) passes strict:true instead, because
+  // there the search window is up to 60% of the whole canvas — an unshrunk "not found"
+  // result is not a usable crop, it's a huge box, and was winning by area against the
+  // real flood-fill candidate.
+  function findBorderDirect(cell, threshold, strict){
     threshold = threshold || 0.65;
     const mask = buildFullMask();
     const { x, y, w, h } = cell;
     let top = y, bottom = y + h - 1, left = x, right = x + w - 1;
+    let foundTop = false, foundBottom = false, foundLeft = false, foundRight = false;
     const margin = 0.5;
     for (let yy = Math.round(y); yy <= Math.round(y + h*margin); yy++){
-      if (rowInkFraction(mask, yy, x, x+w) >= threshold){ top = yy; break; }
+      if (rowInkFraction(mask, yy, x, x+w) >= threshold){ top = yy; foundTop = true; break; }
     }
     for (let yy = Math.round(y+h) - 1; yy >= Math.round(y + h*(1-margin)); yy--){
-      if (rowInkFraction(mask, yy, x, x+w) >= threshold){ bottom = yy; break; }
+      if (rowInkFraction(mask, yy, x, x+w) >= threshold){ bottom = yy; foundBottom = true; break; }
     }
     for (let xx = Math.round(x); xx <= Math.round(x + w*margin); xx++){
-      if (colInkFraction(mask, xx, y, y+h) >= threshold){ left = xx; break; }
+      if (colInkFraction(mask, xx, y, y+h) >= threshold){ left = xx; foundLeft = true; break; }
     }
     for (let xx = Math.round(x+w) - 1; xx >= Math.round(x + w*(1-margin)); xx--){
-      if (colInkFraction(mask, xx, y, y+h) >= threshold){ right = xx; break; }
+      if (colInkFraction(mask, xx, y, y+h) >= threshold){ right = xx; foundRight = true; break; }
     }
+    if (strict && !(foundTop && foundBottom && foundLeft && foundRight)) return null;
     return { x: left, y: top, w: right-left+1, h: bottom-top+1 };
   }
 
@@ -2101,93 +2212,161 @@
 
   // ---------- manual mode ----------
   function renderManualOverlay(){
+    canvasHolder.classList.toggle('tool-draw', manualTool === 'draw');
     manualBoxes.forEach((b, i) => {
       const el = document.createElement('div');
-      el.className = 'manual-box' + (b.excluded ? ' excluded' : '');
+      const selected = selectedIds.has(b.id);
+      el.className = 'manual-box' + (b.excluded ? ' excluded' : '') + (selected ? ' selected' : '');
       positionRect(el, b);
       const num = document.createElement('div');
       num.className = 'num';
       num.textContent = i + 1;
       el.appendChild(num);
-      const rm = document.createElement('div');
-      rm.className = 'rm';
-      rm.textContent = '×';
-      rm.title = 'Delete this box entirely';
-      rm.addEventListener('pointerdown', e => { e.stopPropagation(); });
-      rm.addEventListener('click', e => {
-        e.stopPropagation();
-        manualBoxes.splice(i, 1);
-        renderOverlay();
-      });
-      el.appendChild(rm);
 
-      const toggle = document.createElement('div');
-      toggle.className = 'box-toggle' + (b.excluded ? ' excluded' : '');
-      toggle.innerHTML = eyeIconSVG(b.excluded);
-      toggle.title = b.excluded ? 'Hidden — click to show this frame again' : 'Click to hide this frame from output';
-      toggle.addEventListener('pointerdown', e => { e.stopPropagation(); });
-      toggle.addEventListener('click', e => {
-        e.stopPropagation();
-        b.excluded = !b.excluded;
-        syncActionButtons();
-        renderOverlay();
-      });
-      el.appendChild(toggle);
+      // Resize handles, delete (×) and the visibility toggle are only meaningful once
+      // you can target a specific existing box — the Draw tool never modifies existing
+      // boxes, so skip creating this chrome there to keep drawing over/near them clean.
+      if (manualTool === 'select'){
+        const rm = document.createElement('div');
+        rm.className = 'rm';
+        rm.textContent = '×';
+        rm.title = 'Delete this box entirely';
+        rm.addEventListener('pointerdown', e => { e.stopPropagation(); });
+        rm.addEventListener('click', e => {
+          e.stopPropagation();
+          selectedIds.delete(b.id);
+          manualBoxes.splice(i, 1);
+          renderOverlay();
+          pushHistory();
+        });
+        el.appendChild(rm);
 
-      const resizeSE = document.createElement('div');
-      resizeSE.className = 'handle se';
-      resizeSE.style.position = 'absolute';
-      resizeSE.style.right = '-7px';
-      resizeSE.style.bottom = '-7px';
-      resizeSE.style.left = 'auto';
-      resizeSE.style.top = 'auto';
-      resizeSE.style.transform = 'none';
-      el.appendChild(resizeSE);
+        const toggle = document.createElement('div');
+        toggle.className = 'box-toggle' + (b.excluded ? ' excluded' : '');
+        toggle.innerHTML = eyeIconSVG(b.excluded);
+        toggle.title = b.excluded ? 'Hidden — click to show this frame again' : 'Click to hide this frame from output';
+        toggle.addEventListener('pointerdown', e => { e.stopPropagation(); });
+        toggle.addEventListener('click', e => {
+          e.stopPropagation();
+          b.excluded = !b.excluded;
+          syncActionButtons();
+          renderOverlay();
+          pushHistory();
+        });
+        el.appendChild(toggle);
 
-      const resizeNW = document.createElement('div');
-      resizeNW.className = 'handle nw';
-      resizeNW.style.position = 'absolute';
-      resizeNW.style.left = '-7px';
-      resizeNW.style.top = '-7px';
-      resizeNW.style.right = 'auto';
-      resizeNW.style.bottom = 'auto';
-      resizeNW.style.transform = 'none';
-      el.appendChild(resizeNW);
+        const resizeSE = document.createElement('div');
+        resizeSE.className = 'handle se';
+        resizeSE.style.position = 'absolute';
+        resizeSE.style.right = '-7px';
+        resizeSE.style.bottom = '-7px';
+        resizeSE.style.left = 'auto';
+        resizeSE.style.top = 'auto';
+        resizeSE.style.transform = 'none';
+        el.appendChild(resizeSE);
 
-      makeManualBoxDraggable(el, i);
-      makeManualResizeDraggable(resizeSE, i, 'se');
-      makeManualResizeDraggable(resizeNW, i, 'nw');
+        const resizeNW = document.createElement('div');
+        resizeNW.className = 'handle nw';
+        resizeNW.style.position = 'absolute';
+        resizeNW.style.left = '-7px';
+        resizeNW.style.top = '-7px';
+        resizeNW.style.right = 'auto';
+        resizeNW.style.bottom = 'auto';
+        resizeNW.style.transform = 'none';
+        el.appendChild(resizeNW);
+
+        makeManualBoxSelectable(el, i);
+        makeManualResizeDraggable(resizeSE, i, 'se');
+        makeManualResizeDraggable(resizeNW, i, 'nw');
+      }
 
       canvasHolder.appendChild(el);
     });
     syncActionButtons();
   }
 
-  function makeManualBoxDraggable(el, index){
+  // Clones the boxes matching the given ids (fresh ids assigned), appends them to
+  // manualBoxes, and returns the set of new ids. Used by shift-drag-to-clone.
+  function cloneBoxesByIds(ids){
+    const clones = [];
+    manualBoxes.forEach(b => { if (ids.has(b.id)) clones.push({ ...b, id: nextBoxId++ }); });
+    manualBoxes.push(...clones);
+    return new Set(clones.map(c => c.id));
+  }
+
+  // Select tool, box body:
+  //  - click (no shift): select only this box
+  //  - click a box already selected within a multi-selection, no drag: collapses to just this one
+  //  - drag (no shift): moves the current selection (the whole group if this box was already
+  //    part of one, otherwise just this box)
+  //  - shift+click, released without moving: toggles this box's membership in the selection
+  //  - shift+drag: clones what's being dragged (the whole selection if this box was already
+  //    selected, otherwise just this one box) and moves the clone(s); the clone(s) become the
+  //    new selection
+  function makeManualBoxSelectable(el, index){
     el.addEventListener('pointerdown', e => {
-      if (e.target !== el) return; // let handles/rm handle themselves
+      if (e.target !== el) return; // let handles/rm/toggle handle themselves
       e.preventDefault();
       el.setPointerCapture(e.pointerId);
-      let dragIndex = index;
-      if (e.shiftKey){
-        const clone = { ...manualBoxes[index] };
-        manualBoxes.splice(index+1, 0, clone);
-        dragIndex = index+1;
+
+      const id = manualBoxes[index].id;
+      const shift = e.shiftKey;
+      const wasSelected = selectedIds.has(id);
+      const priorSelection = new Set(selectedIds);
+
+      // The only case with one unambiguous meaning regardless of what happens next.
+      if (!shift && !wasSelected){
+        selectedIds = new Set([id]);
         renderOverlay();
       }
+
       const startX = e.clientX, startY = e.clientY;
-      const start = { ...manualBoxes[dragIndex] };
+      let moved = false;
+      let dragIds = null;
+      let dragStart = null;
+
+      function beginDrag(){
+        if (dragIds) return;
+        if (shift){
+          dragIds = cloneBoxesByIds(wasSelected ? priorSelection : new Set([id]));
+          selectedIds = new Set(dragIds);
+        } else {
+          dragIds = (wasSelected && priorSelection.size > 1) ? new Set(priorSelection) : new Set([id]);
+        }
+        dragStart = {};
+        manualBoxes.forEach(b => { if (dragIds.has(b.id)) dragStart[b.id] = { x: b.x, y: b.y }; });
+        renderOverlay();
+      }
+
       function move(ev){
-        const dx = toNat(ev.clientX - startX);
-        const dy = toNat(ev.clientY - startY);
-        let x = clamp(start.x + dx, 0, natW - start.w);
-        let y = clamp(start.y + dy, 0, natH - start.h);
-        manualBoxes[dragIndex] = { ...manualBoxes[dragIndex], x, y };
+        const dx = toNat(ev.clientX - startX), dy = toNat(ev.clientY - startY);
+        if (!moved && Math.max(Math.abs(toDisp(dx)), Math.abs(toDisp(dy))) > SMART_ADD_DRAG_THRESHOLD){
+          moved = true;
+          beginDrag();
+        }
+        if (!moved) return;
+        manualBoxes.forEach(b => {
+          if (!dragIds.has(b.id)) return;
+          const s = dragStart[b.id];
+          b.x = clamp(s.x + dx, 0, natW - b.w);
+          b.y = clamp(s.y + dy, 0, natH - b.h);
+        });
         renderOverlay();
       }
       function up(){
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
+        if (!moved){
+          if (shift){
+            if (wasSelected) selectedIds.delete(id);
+            else selectedIds.add(id);
+          } else if (wasSelected){
+            selectedIds = new Set([id]);
+          }
+          renderOverlay();
+        } else {
+          pushHistory();
+        }
       }
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
@@ -2220,34 +2399,46 @@
           x = clamp(x, 0, fixedRight - 20);
           y = clamp(y, 0, fixedBottom - 20);
         }
-        manualBoxes[index] = { x, y, w, h };
+        manualBoxes[index] = { ...manualBoxes[index], x, y, w, h };
         renderOverlay();
       }
       function up(){
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
+        pushHistory();
       }
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
     });
   }
 
-  addBoxBtn.addEventListener('click', () => {
-    const w = Math.min(natW * 0.35, natW);
-    const h = manualAspect ? w / manualAspect : natH * 0.3;
-    const x = clamp((natW - w) / 2 + (manualBoxes.length * 20) % (natW*0.2), 0, natW - w);
-    const y = clamp((natH - h) / 2 + (manualBoxes.length * 20) % (natH*0.2), 0, natH - h);
-    manualBoxes.push({ x, y, w, h });
+  // ---------- manual tool switch: Draw (default) vs Select / Move ----------
+  function setManualTool(tool){
+    manualTool = tool;
+    drawToolBtn.classList.toggle('active', tool === 'draw');
+    selectToolBtn.classList.toggle('active', tool === 'select');
+    if (displayCanvas) displayCanvas.style.cursor = tool === 'draw' ? 'crosshair' : 'default';
     renderOverlay();
+  }
+  drawToolBtn.addEventListener('click', () => setManualTool('draw'));
+  selectToolBtn.addEventListener('click', () => setManualTool('select'));
+
+  // Delete/Backspace removes every selected box while the Select/Move tool is active.
+  // Bails when focus is in a text field so typing in e.g. the filename prefix or a
+  // rows/cols input isn't hijacked.
+  window.addEventListener('keydown', e => {
+    if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+    if (mode !== 'manual' || manualTool !== 'select' || !selectedIds.size) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (document.activeElement && document.activeElement.isContentEditable)) return;
+    e.preventDefault();
+    manualBoxes = manualBoxes.filter(b => !selectedIds.has(b.id));
+    selectedIds.clear();
+    renderOverlay();
+    pushHistory();
   });
 
-  // ---------- smart add: click a frame to auto-detect its bounds ----------
-  smartAddBtn.addEventListener('click', () => {
-    smartAddActive = !smartAddActive;
-    smartAddBtn.classList.toggle('primary', smartAddActive);
-    smartAddBtn.textContent = smartAddActive ? 'Click a frame…' : 'Smart add';
-    if (displayCanvas) displayCanvas.style.cursor = smartAddActive ? 'crosshair' : 'default';
-  });
+  // ---------- draw tool: click a frame to auto-detect its bounds, or drag to draw one exactly ----------
 
   function searchWindowAround(cx, cy){
     const w = Math.min(natW, natW*0.6), h = Math.min(natH, natH*0.6);
@@ -2256,12 +2447,14 @@
     return { x, y, w, h };
   }
 
-  function stageClickHandler(e){
-    if (mode !== 'manual' || !smartAddActive) return;
-    if (e.target !== displayCanvas) return;
-    const rect = displayCanvas.getBoundingClientRect();
-    const dispX = e.clientX - rect.left, dispY = e.clientY - rect.top;
-    const natX = toNat(dispX), natY = toNat(dispY);
+  // Drag distance (in DISPLAYED px) below which a smart-add gesture counts as a plain
+  // click rather than a drawn box — small enough that an intentional drag never gets
+  // mistaken for a click, generous enough that a slightly-shaky click doesn't trigger
+  // the "use exactly what I drew" path by accident.
+  const SMART_ADD_DRAG_THRESHOLD = 4;
+
+  // click a point: auto-detect the frame under it (old "smart add" behavior)
+  function smartAddDetectAt(natX, natY){
     let box = bestContentRectNear(natX, natY, searchWindowAround(natX, natY));
     if (box && borderSnapToggle.checked) box = snapEdgesToBorder(box);
     if (!box){
@@ -2272,60 +2465,77 @@
       box.x = clamp(box.x, 0, natW-box.w);
       box.y = clamp(box.y, 0, natH-box.h);
     }
-    manualBoxes.push(box);
-    renderOverlay();
+    return box;
   }
 
-  // ---------- auto-fill along direction ----------
-  autoFillBtn.addEventListener('click', () => {
-    if (manualBoxes.length < 2){
-      alert('Add at least two boxes first (place them over two consecutive frames), then auto-fill will infer the rest.');
+  // drag a rectangle: use exactly what was drawn (only refined inward to a real border,
+  // never re-detected/grown from a single point) so the box always matches the drag
+  function smartAddRectFromDrag(x0, y0, x1, y1){
+    let box = {
+      x: clamp(Math.min(x0, x1), 0, natW),
+      y: clamp(Math.min(y0, y1), 0, natH),
+      w: Math.abs(x1 - x0),
+      h: Math.abs(y1 - y0)
+    };
+    if (borderSnapToggle.checked) box = snapEdgesToBorder(box);
+    box = fitAspect(box, manualAspect);
+    box.w = clamp(box.w, 20, natW);
+    box.h = clamp(box.h, 20, natH);
+    box.x = clamp(box.x, 0, natW - box.w);
+    box.y = clamp(box.y, 0, natH - box.h);
+    return box;
+  }
+
+  function canvasPointFromEvent(e){
+    const rect = displayCanvas.getBoundingClientRect();
+    const dispX = clamp(e.clientX - rect.left, 0, rect.width);
+    const dispY = clamp(e.clientY - rect.top, 0, rect.height);
+    return { natX: toNat(dispX), natY: toNat(dispY) };
+  }
+
+  function stagePointerDownHandler(e){
+    if (mode !== 'manual') return;
+    if (e.target !== displayCanvas) return;
+    if (manualTool === 'select'){
+      // clicked empty canvas (not any box, since boxes sit above the canvas and catch
+      // their own pointerdown in select mode) — clear the current selection
+      if (selectedIds.size){ selectedIds.clear(); renderOverlay(); }
       return;
     }
-    const a = manualBoxes[manualBoxes.length-2], b = manualBoxes[manualBoxes.length-1];
-    const acx = a.x+a.w/2, acy = a.y+a.h/2, bcx = b.x+b.w/2, bcy = b.y+b.h/2;
-    const dx = bcx-acx, dy = bcy-acy;
-    if (Math.abs(dx) < 2 && Math.abs(dy) < 2){
-      alert('The last two boxes are on top of each other — space them over two different frames first.');
-      return;
-    }
-    const w = (a.w+b.w)/2, h = (a.h+b.h)/2;
+    if (manualTool !== 'draw') return;
+    e.preventDefault();
+    displayCanvas.setPointerCapture(e.pointerId);
 
-    function iou(r1, r2){
-      const ix = Math.max(r1.x, r2.x), iy = Math.max(r1.y, r2.y);
-      const ax = Math.min(r1.x+r1.w, r2.x+r2.w), ay = Math.min(r1.y+r1.h, r2.y+r2.h);
-      const iw = Math.max(0, ax-ix), ih = Math.max(0, ay-iy);
-      const inter = iw*ih;
-      if (inter <= 0) return 0;
-      return inter / (r1.w*r1.h + r2.w*r2.h - inter);
-    }
-    function overlapsAny(r, list){ return list.some(o => iou(r,o) > 0.4); }
-    function refine(cx, cy){
-      const raw = { x: clamp(cx-w/2,0,Math.max(0,natW-w)), y: clamp(cy-h/2,0,Math.max(0,natH-h)), w, h };
-      const detected = bestContentRectNear(cx, cy, searchWindowAround(cx,cy));
-      if (!detected) return raw;
-      return fitAspect(borderSnapToggle.checked ? snapEdgesToBorder(detected) : detected, manualAspect);
-    }
+    const start = canvasPointFromEvent(e);
+    let moved = false;
+    const previewEl = document.createElement('div');
+    previewEl.className = 'smart-add-drag';
+    canvasHolder.appendChild(previewEl);
+    positionRect(previewEl, { x: start.natX, y: start.natY, w: 0, h: 0 });
 
-    const forward = [];
-    let cx = bcx+dx, cy = bcy+dy, guard = 0;
-    while (cx+w/2 > 0 && cx-w/2 < natW && cy+h/2 > 0 && cy-h/2 < natH && guard < 60){
-      guard++;
-      const rect = refine(cx, cy);
-      if (!overlapsAny(rect, manualBoxes.concat(forward))) forward.push(rect);
-      cx += dx; cy += dy;
+    function move(ev){
+      const cur = canvasPointFromEvent(ev);
+      const x = Math.min(start.natX, cur.natX), y = Math.min(start.natY, cur.natY);
+      const w = Math.abs(cur.natX - start.natX), h = Math.abs(cur.natY - start.natY);
+      if (toDisp(Math.max(w, h)) > SMART_ADD_DRAG_THRESHOLD) moved = true;
+      positionRect(previewEl, { x, y, w, h });
     }
-    const backward = [];
-    cx = acx-dx; cy = acy-dy; guard = 0;
-    while (cx+w/2 > 0 && cx-w/2 < natW && cy+h/2 > 0 && cy-h/2 < natH && guard < 60){
-      guard++;
-      const rect = refine(cx, cy);
-      if (!overlapsAny(rect, manualBoxes.concat(forward).concat(backward))) backward.push(rect);
-      cx -= dx; cy -= dy;
+    function up(ev){
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      previewEl.remove();
+      const end = canvasPointFromEvent(ev);
+      const box = moved
+        ? smartAddRectFromDrag(start.natX, start.natY, end.natX, end.natY)
+        : smartAddDetectAt(end.natX, end.natY);
+      box.id = nextBoxId++;
+      manualBoxes.push(box);
+      renderOverlay();
+      pushHistory();
     }
-    manualBoxes = backward.reverse().concat(manualBoxes).concat(forward);
-    renderOverlay();
-  });
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
 
   aspectPresets.querySelectorAll('button').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -2348,9 +2558,10 @@
     processBtn.disabled = exportBtn.disabled;
     sendMushyBtn.disabled = exportBtn.disabled;
     if (m !== 'manual'){
-      smartAddActive = false;
-      smartAddBtn.classList.remove('primary');
-      smartAddBtn.textContent = 'Smart add';
+      manualTool = 'draw';
+      drawToolBtn.classList.add('active');
+      selectToolBtn.classList.remove('active');
+      if (displayCanvas) displayCanvas.style.cursor = 'default';
     }
     renderOverlay();
   }
@@ -2796,6 +3007,7 @@
     currentPageIndex = -1;
     img = null;
     manualBoxes = [];
+    selectedIds.clear();
     vLines = []; hLines = []; trimRects = []; excludedCells = [];
     fullMask = null;
     processedFrames.forEach(f => { if (f.url) URL.revokeObjectURL(f.url); });
@@ -2803,9 +3015,10 @@
     processedIndex = 0;
     viewerMode = 'original';
     combinedPreview = null;
-    smartAddActive = false;
-    smartAddBtn.classList.remove('primary');
-    smartAddBtn.textContent = 'Smart add';
+    history = []; historyIndex = -1;
+    manualTool = 'draw';
+    drawToolBtn.classList.add('active');
+    selectToolBtn.classList.remove('active');
     controls.classList.add('disabled');
     stageContent.innerHTML = '';
     const empty = document.createElement('div');
