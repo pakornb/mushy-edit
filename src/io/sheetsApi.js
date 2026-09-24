@@ -6,12 +6,25 @@
 // for the one-time GCP/OAuth-client/deployment steps this needs — none of
 // that can happen from code, it's done once per studio in Google's consoles.
 //
+// CLIENT_ID is the shared "hornet-tools" OAuth client — the same one works
+// for any Hornet tool calling any deployed Apps Script project, isn't a
+// secret (client IDs are public by design), and never changes per show, so
+// it's hardcoded here rather than something every artist re-enters.
+//
+// deploymentId, by contrast, IS specific to one Sheet's own deployed script —
+// every show needs its own. It's passed in by the caller (assets.js), which
+// reads it from project.sheetsDeploymentId — set once by whoever wires up
+// that show's Sheet, then saved in the work file so it travels with the
+// project for every artist who opens it. Never store it in this browser's
+// localStorage; that would mean re-entering it per browser/profile.
+//
 // UNVERIFIED AGAINST A REAL DEPLOYMENT: the request/response shape here
 // follows Google's documented scripts.run contract, but the exact error
 // shape when the called script throws hasn't been tested live — see the
 // error handling in callScript() below if a real call reports something
 // unexpected.
 
+const CLIENT_ID = '902841680403-3ua13oavs9ic6m4i1e6si7hl2b0q3qup.apps.googleusercontent.com';
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/script.scriptapp';
 
 let gisReady = null;
@@ -28,45 +41,22 @@ function loadGis() {
   return gisReady;
 }
 
-function getConfig() {
-  let clientId = '', deploymentId = '';
-  try {
-    clientId = localStorage.getItem('mushyGoogleClientId') || '';
-    deploymentId = localStorage.getItem('mushyScriptDeploymentId') || '';
-  } catch (e) {}
-  return { clientId, deploymentId };
-}
-function setConfig(clientId, deploymentId) {
-  try {
-    localStorage.setItem('mushyGoogleClientId', clientId);
-    localStorage.setItem('mushyScriptDeploymentId', deploymentId);
-  } catch (e) {}
-}
-export function configureGoogleSheets() {
-  const cur = getConfig();
-  const clientId = (prompt('Google OAuth Client ID (GCP project → APIs & Services → Credentials):', cur.clientId) || '').trim();
-  if (!clientId) return false;
-  const deploymentId = (prompt('Apps Script API-executable deployment ID (Deploy → Manage deployments):', cur.deploymentId) || '').trim();
-  if (!deploymentId) return false;
-  setConfig(clientId, deploymentId);
-  return true;
-}
-export function hasGoogleSheetsConfig() {
-  const { clientId, deploymentId } = getConfig();
-  return !!(clientId && deploymentId);
-}
-
 let tokenClient = null, cachedToken = null, tokenExpiry = 0;
 async function getAccessToken() {
-  const { clientId } = getConfig();
-  if (!clientId) throw new Error('No Google Client ID set — use "Configure Google Sheets…" first.');
   if (cachedToken && Date.now() < tokenExpiry - 30000) return cachedToken;
   await loadGis();
   return new Promise((resolve, reject) => {
     if (!tokenClient) {
-      tokenClient = window.google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: SCOPES, callback: () => {} });
+      tokenClient = window.google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPES, callback: () => {} });
     }
+    // If the popup gets closed (manually, or abandoned on Google's "unverified
+    // app" warning screen) without the user finishing the flow, GIS never
+    // calls back at all — this would otherwise hang forever with no feedback.
+    const timeout = setTimeout(() => {
+      reject(new Error('Timed out waiting for Google sign-in. If you saw a "Google hasn’t verified this app" warning, click Advanced → Go to Mushy Edit (unsafe), then check both permissions and continue — the popup has to fully complete, not just close.'));
+    }, 120000);
     tokenClient.callback = (resp) => {
+      clearTimeout(timeout);
       if (resp.error) { reject(new Error(resp.error)); return; }
       cachedToken = resp.access_token;
       tokenExpiry = Date.now() + (resp.expires_in || 3600) * 1000;
@@ -76,9 +66,8 @@ async function getAccessToken() {
   });
 }
 
-async function callScript(fn, params) {
-  const { deploymentId } = getConfig();
-  if (!deploymentId) throw new Error('No Apps Script deployment ID set — use "Configure Google Sheets…" first.');
+async function callScript(fn, params, deploymentId) {
+  if (!deploymentId) throw new Error('This project has no Google Sheet deployment ID set — Export → "Set Google Sheet deployment ID…" first.');
   const token = await getAccessToken();
   const resp = await fetch(`https://script.googleapis.com/v1/scripts/${deploymentId}:run`, {
     method: 'POST',
@@ -95,6 +84,6 @@ async function callScript(fn, params) {
   return json.response ? json.response.result : undefined;
 }
 
-export function apiBuild(data) { return callScript('apiBuild', [data]); }
-export function apiSyncSheetState() { return callScript('apiSyncSheetState', []); }
-export function apiUpdateComposite(payload) { return callScript('apiUpdateComposite', [payload]); }
+export function apiBuild(data, deploymentId) { return callScript('apiBuild', [data], deploymentId); }
+export function apiSyncSheetState(deploymentId) { return callScript('apiSyncSheetState', [], deploymentId); }
+export function apiUpdateComposite(payload, deploymentId) { return callScript('apiUpdateComposite', [payload], deploymentId); }

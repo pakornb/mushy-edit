@@ -154,9 +154,26 @@ export async function exportBreakdownCompositeJSON() {
 // ---------- direct-to-Sheets export (experimental, no file step) ----------
 // Signed-in-user version of the composite export: calls the Apps Script
 // Execution API (sheetsApi.js) instead of downloading + picking a JSON file.
+// deploymentId lives on the PROJECT (saved in the work file), not this
+// browser's localStorage — set once per show, then every artist who opens
+// that file already has it. See setSheetsDeploymentId()/promptSheetsDeploymentId().
+export function setSheetsDeploymentId(id) { mutate(() => { P.sheetsDeploymentId = (id || '').trim(); }); }
+export function promptSheetsDeploymentId() {
+  const id = (prompt('Apps Script API-executable deployment ID for this show’s Sheet (Deploy → Manage deployments in that Sheet’s Apps Script editor):', P.sheetsDeploymentId || '') || '').trim();
+  if (!id) return false;
+  setSheetsDeploymentId(id);
+  return true;
+}
+
+function requireDeploymentId() {
+  if (!P.sheetsDeploymentId) throw new Error('No Google Sheet deployment ID set for this project — use "Set Google Sheet deployment ID…" first.');
+  return P.sheetsDeploymentId;
+}
+
 export async function sendBuildDirect() {
+  const deploymentId = requireDeploymentId();
   const data = await buildBreakdownDataComposite();
-  return apiBuild(data);
+  return apiBuild(data, deploymentId);
 }
 
 /**
@@ -171,7 +188,8 @@ export async function sendBuildDirect() {
  * as new, in project order — same shape updateActiveSheet() produces.
  */
 export async function sendUpdateDirect() {
-  const sync = await apiSyncSheetState();
+  const deploymentId = requireDeploymentId();
+  const sync = await apiSyncSheetState(deploymentId);
   const existingNames = (sync && sync.names) || [];
   if (!existingNames.length) throw new Error('No existing breakdown rows found — use "Build new sheet (direct)" first.');
 
@@ -206,7 +224,7 @@ export async function sendUpdateDirect() {
   });
 
   const strip = await buildStrip(entries, STRIP_MONTAGE_W);
-  return apiUpdateComposite({ finalRows, strip });
+  return apiUpdateComposite({ finalRows, strip }, deploymentId);
 }
 
 // ---------- modal shell ----------
