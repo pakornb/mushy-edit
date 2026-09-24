@@ -10,7 +10,13 @@ export async function buildViewerData() {
     shot: bd.shotIndex, annos: getAnnos(P, bd.fi), fit: getBoardFit(P, bd.fi),
   }));
   let audio = null;
-  if (P.audio && P.audio.blob) audio = { name: P.audio.name, offsetSec: P.audio.offsetSec || 0, dataURL: await blobToDataURL(P.audio.blob) };
+  if (P.audio && P.audio.blob) {
+    audio = {
+      name: P.audio.name, offsetSec: P.audio.offsetSec || 0,
+      gain: P.audio.gain ?? 1, fadeInFrames: P.audio.fadeInFrames || 0, fadeOutFrames: P.audio.fadeOutFrames || 0,
+      dataURL: await blobToDataURL(P.audio.blob),
+    };
+  }
   return {
     kind: 'animatic-view', version: 1, baseName: P.baseName,
     fps: P.fps, resW: P.resW, resH: P.resH, spotSeconds: P.spotSeconds,

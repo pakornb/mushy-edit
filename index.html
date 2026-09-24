@@ -45,6 +45,7 @@
         <button id="mMp4">Export mp4 — final…</button>
         <button id="mMp4Draft">Export mp4 — draft (fast)…</button>
         <button id="mViewer">Export review viewer…</button>
+        <button id="mEdl">Export EDL (zip w/ frames + audio)…</button>
         <div class="menu-sep"></div>
         <button id="mPreview">Preview sheet…</button>
         <button id="mJson">Download breakdown JSON</button>
@@ -69,9 +70,11 @@
       <div><span>h</span> hide/show board · <span>p</span> pin · <span>c</span> cut/merge</div>
       <div><span>+ / −</span> zoom in / out</div>
       <div><span>Cmd/Ctrl + Z</span> undo · <span>+Shift</span> redo</div>
+      <div><span>Cmd/Ctrl + Shift + ← / →</span> move board(s) one slot</div>
       <hr />
-      <div><span>drag tile ↕</span> retime · <span>↔</span> mushy-offset</div>
+      <div><span>drag tile ↕</span> retime · <span>↔</span> mushy-offset · <span>Alt+drag</span> reorder</div>
       <div><span>Cmd/Ctrl + click</span> add/remove from selection</div>
+      <div><span>+ insert</span> button: hover a board edge for +, upload or blank frame</div>
       <div><span>drag on ruler</span> marquee select · click = seek</div>
       <div><span>grab blue bar</span> scrub frame-by-frame</div>
       <div><span>click marker</span> re-enable disabled board/shot</div>
@@ -146,6 +149,7 @@
               <button class="btn ghost sm" id="autoBtn" title="fill unpinned boards to hit the spot">auto</button>
               <button class="btn ghost sm" id="rebalBtn" title="scale unpinned boards to the spot">rebalance</button>
               <button class="btn ghost sm" id="cutBtn" title="cut / merge at the current board (c)">✂ cut</button>
+              <button class="btn ghost sm" id="insertModeBtn" title="insert mode: hover a board edge for +">+ insert</button>
               <button class="btn ghost sm" id="loadAudioBtn0" title="load scratch VO / music">load audio</button>
             </span>
             <span class="tl-tools">
@@ -174,6 +178,15 @@
             <button class="tbtn sm" id="slipPlus1">+1f</button>
             <button class="btn ghost sm" id="setSync" title="set audio start to the current frame">set sync to playhead</button>
             <button class="btn ghost sm" id="useAudioLen" title="set spot length to audio length">use audio length</button>
+            <span class="sep"></span>
+            <span class="aud-gain-lbl">gain</span>
+            <input type="range" id="audioGain" min="0" max="2" step="0.01" value="1" title="master volume (mp4 + viewer)" />
+            <span class="aud-gain-val" id="audioGainVal">100%</span>
+            <span class="aud-gain-lbl">fade in</span>
+            <input type="number" id="fadeInFrames" min="0" step="1" value="0" title="fade-in length, in frames" />
+            <span class="aud-gain-lbl">fade out</span>
+            <input type="number" id="fadeOutFrames" min="0" step="1" value="0" title="fade-out length, in frames" />
+            <span class="aud-gain-lbl">frames</span>
             <button class="btn ghost sm danger" id="removeAudio" title="remove audio">remove</button>
           </div>
         </div>
@@ -207,6 +220,7 @@
   <input type="file" id="workInput" accept=".json,application/json" />
   <input type="file" id="audioInput" accept="audio/*" />
   <input type="file" id="splitFileInput" multiple accept="image/*" />
+  <input type="file" id="insertFileInput" accept="image/*" />
 
   <script type="module" src="/src/editor/main.js"></script>
 </body>

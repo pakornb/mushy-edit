@@ -19,6 +19,9 @@ export async function saveWorkFile(onProgress) {
       offsetSec: P.audio.offsetSec || 0,
       inSec: P.audio.inSec ?? null,
       outSec: P.audio.outSec ?? null,
+      gain: P.audio.gain ?? 1,
+      fadeInFrames: P.audio.fadeInFrames || 0,
+      fadeOutFrames: P.audio.fadeOutFrames || 0,
       data: await blobToBase64(P.audio.blob),
     };
   }
@@ -90,6 +93,9 @@ export async function openWorkFile(file, onProgress) {
       name: doc.audio.name, blob, url: URL.createObjectURL(blob),
       offsetSec: doc.audio.offsetSec || 0,
       inSec: doc.audio.inSec ?? null, outSec: doc.audio.outSec ?? null,
+      gain: doc.audio.gain ?? 1,
+      fadeInFrames: doc.audio.fadeInFrames || 0,
+      fadeOutFrames: doc.audio.fadeOutFrames || 0,
     };
   }
 

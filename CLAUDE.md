@@ -111,15 +111,97 @@ just `npm install && npm run build` in place. Always run a build before committi
 1. **Batch B — insert board + update-images-preserve-timing:**
    - "Insert board from disk": upload an image, choose insert before/after the current board (or
      at the playhead); weave it into `frames`/`diffs`/`frameKeys`, give it a default duration,
-     reflow. Everything else keyed by filename stays put.
+     reflow. Everything else keyed by filename stays put. **DONE (and actually wired up now —**
+     a previous pass built `insertFrame()` but never called it from anywhere; the UI below was
+     only ever documented, not shipped, until this pass connected the two). `insertFrame()` in
+     `frames.js` does the splice/rename-on-collision/neighbor-diff-recompute/default-duration
+     work. UI: a global **"+ insert" toggle** above the timeline (`insertModeBtn`, gated so a
+     stray click during normal drag/click doesn't accidentally insert) arms hover-revealed `+`
+     gaps on the LEFT/RIGHT edge of each timeline tile (`.slot .insert-gap`, CSS-only show/hide
+     via `#tlInner.insert-mode .slot:hover`, grows on its own hover) — click one to open a small
+     popover: **"Upload image…"** (file picker) or **"Blank frame"** (a color picker → a flat
+     solid-color placeholder at spot resolution, meant to be drawn on with the existing annotate
+     tool). Deliberately a popover, not a menu — see item 4 below on why menus were rejected here.
+     Frame Splitter is NOT wired into mid-timeline insert (only the very first import screen) —
+     deliberately out of scope for now; re-open the sheet in Frame Splitter and use insert instead.
    - "Update images (preserve timing)": re-ingest a folder/zip, **match by filename**, swap pixels
      while keeping all timing/pins/disables/annotations/tags. New filenames = new boards to place.
-     Renamed files break the key (note it; a relink UI is a possible follow-on).
-2. **Step 5 — NLE handoff (EDL + FCPXML):** export the cut so an editor can rebuild the animatic
+     Renamed files break the key (note it; a relink UI is a possible follow-on). **DONE** — this is
+     the "Replace…" option in the header's `Images ▾` menu (`imageOps.js replaceFrames()`); the
+     "new filenames = new boards" half is still open (currently unmatched files are just reported,
+     not auto-inserted — could wire into `insertFrame()` later).
+2. **Move / reorder boards. DONE.** Two entry points, both operating on RAW `p.frames` array
+   position (not enabled-flat timeline position, so a move can land a board next to a hidden one):
+   - **Alt+drag** a tile (`attachTile()` in `main.js`) — a third gesture alongside the existing
+     axis-locked retime(↕)/offset(↔), picked at pointerdown by `e.altKey` rather than by axis, so
+     it can't be triggered by accident mid-retime. Shows a drop-position indicator line computed
+     from the same `bd.startSec*pps` math `buildTimeline()` uses to lay out tiles (not DOM
+     `getBoundingClientRect()` reads), snapping to whichever board-gap the pointer is nearer.
+   - **Cmd/Ctrl+Shift+←/→** moves the current board (or the whole selection, treated as one
+     contiguous block regardless of whether the selection itself is contiguous) one slot in that
+     direction.
+   - Both call `moveFrames()` in `frames.js` — extracts the moving boards, closes the gap, splices
+     them in at the (index-adjusted) target, then rebuilds `frameKeys` and **recomputes the whole
+     `diffs` array** from cached `luma` (cheap; not worth patching individual seams the way
+     `insertFrame()` does for its one new neighbor, since a reorder can touch any number of them
+     at once). Undoable: `captureState()`/`applyState()` now also snapshot/restore frame order (by
+     filename — see the Conventions note below on why this was previously missing entirely, for
+     insert too).
+3. **Audio: master gain + fade in/out. DONE.** `p.audio.gain` (0–2 linear multiplier) and
+   `fadeInFrames`/`fadeOutFrames` (length typed in **frames**, converted via `p.fps` — not
+   seconds, so it stays in sync if fps changes). Applied in three places, matching the
+   preview/mp4/viewer parity goal above:
+   - **mp4 export** (`mp4.js` `audioFilterChain()`) — bakes an `-af` chain: `volume=` (only if
+     ≠1) + `afade=t=in:st=0:...` + `afade=t=out:st=<audibleDur-fadeOutSec>:...`. `st=0` for the
+     fade-in is deliberate: ffmpeg's `afade` timing is relative to what the filter actually sees,
+     which is already past any `-ss` trim (negative `offsetSec`), so it's always "the first sample
+     that plays," not the raw file's start. Fade-out needs `a.duration` to know where the clip
+     ends — silently skipped (gain still applies) if that's missing, which happens for audio
+     reloaded from a work file (duration was never persisted there — a pre-existing gap, not new).
+   - **Viewer** (`viewer.js` export + `src/viewer/main.js` playback) — the viewer's rAF loop
+     already ticks every playback frame, so it recomputes `audioEl.volume` live each tick
+     (`audioVolumeAt()`), making the fade genuinely audible on review — unlike the main editor.
+   - **Main editor**: deliberately does NOT play the fade live during scrubbing/playback (only
+     gain could cheaply apply there via `audioEl.volume`, and even that isn't wired up) — the
+     editor's `<audio>``Transport` was left alone; treat this as scoped out unless it turns out
+     to matter in practice.
+   - UI lives in the audio lane (`index.html`): a gain slider + two frame-count number inputs.
+4. **EDL export. DONE** (as a **zip package**, not a bare `.edl` file — deliberately, so it's
+   self-contained/relinkable without hunting down the original images separately). `src/io/edl.js`
+   `buildEdl()` writes CMX3600 text (one `V` event per enabled board — still images have no real
+   source timecode, so source is always `00:00:00:00` → its own duration; `* FROM CLIP NAME:`
+   carries the real filename since the 8-char reel field can't; one `A` event for the audio clip
+   if present, reusing `offsetSec`/`duration` for its record range). `exportEdlZip()` bundles that
+   `.edl` with every enabled board's full-res source image (under its original filename, so the
+   EDL's clip-name comments and the zip contents line up) and the audio file, via JSZip (already a
+   dependency). Reuses `nle.js`'s `frameCounts()` (now exported) for the same drift-free whole-frame
+   math the FCPXML export already relies on. **Not validated against a real NLE import**, same
+   caveat as FCPXML below — only checked for well-formed output and correct frame math.
+5. **Step 5 — NLE handoff (EDL + FCPXML):** export the cut so an editor can rebuild the animatic
    in Resolve/Premiere. FCPXML should reference the **full-res source images** at each board's
-   duration; EDL is the simpler timing list. Neither embeds images (they reference by name/path).
+   duration; EDL is the simpler timing list. Neither embeds images (they reference by name/path) —
+   contrast with item 4 above, which is a *separate*, self-contained zip export, not this one.
+   - **FCPXML: DONE** — `src/io/nle.js` `buildFcpxml()`/`exportFcpxml()`, wired into
+     Export ▾ → "Export FCPXML (NLE handoff)…". Targets FCPXML 1.9 (broadest common
+     Resolve/Premiere support). References images by **bare filename only** (no path) — the
+     editor relinks to the original image folder on import, since the app never has a real
+     filesystem path (images are in-memory blobs). Frame math: per-board start/length are
+     summed as whole frames (`Math.round(len*fps)`, accumulated as integers) so there's no
+     rounding drift between the export and the app's own timeline — checked in isolation
+     against a mock project (disabled-board exclusion, rounding, XML escaping all correct),
+     but **not yet validated against a real Resolve/Premiere import** — if either app rejects
+     something on first real test, that's the place to look.
+   - **EDL (this exact format, bare file, no zip): not started** — item 4 above covers the
+     zip-packaged version that was actually asked for; a bare `.edl` export (no bundled images)
+     would be a small addition to `edl.js` if ever needed on its own.
 3. Ongoing **feel-tuning** constants: `SEC_PER_PX` drag sensitivity (~0.012), default falloff
    reach/curve, horizontal-offset mushiness. These are "play with real boards and adjust", not spec.
+4. **UI clarity pass on the Boards/Shots property panels** (inspector.js) — noted for later, NOT
+   started. Reduce clutter and make state easier to read at a glance: the board action row (hide/
+   pin/cut/reset, currently four separate icon buttons), the Shot section header (disable/pin
+   icons), the Tasks grid. Discuss the approach before touching this — don't assume grouping
+   controls into a menu is the right fix; that was tried once and reverted (lost the icon
+   affordance without being asked to make that trade).
 
 ## Conventions
 - Vanilla JS, terse but readable; no new frameworks/deps without good reason.

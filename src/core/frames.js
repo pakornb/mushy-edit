@@ -70,6 +70,80 @@ async function ingest(items, source, firstName, zipName, preserve, onProgress) {
   return p;
 }
 
+// Insert a new board from a file at array position `atIndex` (0..frames.length).
+// Renamed on filename collision with an existing board, since every other bit
+// of state (durations, pins, annos, tasks...) is keyed by filename. Recomputes
+// diffs for the new frame and its next neighbor so scene-cut detection stays
+// accurate; does NOT call computeShots — caller re-runs that (and must remap
+// any frame indices it's holding onto, e.g. current selection, since every
+// index at or after atIndex shifts by one).
+export async function insertFrame(p, atIndex, file) {
+  let name = file.name;
+  if (p.frames.some((f) => f.name === name)) {
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '';
+    let n = 1;
+    while (p.frames.some((f) => f.name === `${stem}_ins${n}${ext}`)) n++;
+    name = `${stem}_ins${n}${ext}`;
+  }
+  const url = URL.createObjectURL(file);
+  const img = await loadImage(url).catch(() => null);
+  if (!img) { URL.revokeObjectURL(url); return null; }
+  const thumb = makeThumb(img);
+  const tctx = makeTinyCtx();
+  const luma = computeLuma(tctx, img);
+  const frame = { index: atIndex, name, url, thumb, full: file, luma, w: img.naturalWidth, h: img.naturalHeight };
+
+  p.frames.splice(atIndex, 0, frame);
+  p.frameKeys.splice(atIndex, 0, shotKeyOf(name));
+  if (atIndex === 0) {
+    p.diffs.splice(atIndex, 0, 0);
+  } else {
+    const prev = await ensureLuma(p.frames[atIndex - 1], tctx);
+    p.diffs.splice(atIndex, 0, prev ? diffLuma(prev, luma) : 0);
+  }
+  if (atIndex + 1 < p.frames.length) {
+    const next = await ensureLuma(p.frames[atIndex + 1], tctx);
+    if (next) p.diffs[atIndex + 1] = diffLuma(luma, next);
+  }
+  return { name, atIndex };
+}
+
+// A flat-color placeholder board (e.g. so the user can annotate/draw on it by
+// hand) at the project's spot resolution. Returns a Blob the same way a real
+// upload would, so it can go through the exact same insertFrame() path.
+export function solidColorBlob(w, h, color) {
+  return new Promise((res) => {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, w, h);
+    c.toBlob((b) => res(b), 'image/png');
+  });
+}
+
+// Move one or more boards (by their CURRENT array positions) to sit just before
+// `insertBeforeIndex` (an index into the array as it stands BEFORE removal),
+// preserving their relative order. Recomputes frameKeys + diffs for the whole
+// sequence afterward — reordering can change any number of neighbor pairs at
+// once, so patching individual seams (as insertFrame does for its single new
+// neighbor) isn't worth the bookkeeping; diff math itself is cheap.
+export async function moveFrames(p, indices, insertBeforeIndex) {
+  const sorted = [...new Set(indices)].sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const moving = sorted.map((i) => p.frames[i]);
+  let adj = insertBeforeIndex;
+  sorted.forEach((i) => { if (i < insertBeforeIndex) adj--; });
+  for (let k = sorted.length - 1; k >= 0; k--) p.frames.splice(sorted[k], 1);
+  adj = Math.max(0, Math.min(p.frames.length, adj));
+  p.frames.splice(adj, 0, ...moving);
+
+  p.frameKeys = p.frames.map((f) => shotKeyOf(f.name));
+  const tctx = makeTinyCtx();
+  const lumas = [];
+  for (const f of p.frames) lumas.push(await ensureLuma(f, tctx));
+  p.diffs = lumas.map((l, i) => (i === 0 || !l || !lumas[i - 1]) ? 0 : diffLuma(lumas[i - 1], l));
+  return { newIndices: moving.map((f) => p.frames.indexOf(f)) };
+}
+
 export function loadImage(url) {
   return new Promise((res, rej) => {
     const im = new Image();
@@ -107,4 +181,18 @@ export function makeThumb(img) {
   const thumb = document.createElement('canvas'); thumb.width = THUMB_W; thumb.height = THUMB_H;
   drawCover(thumb.getContext('2d'), img, THUMB_W, THUMB_H);
   return thumb;
+}
+
+// A frame's luma is only ever computed at ingest/replace time — a board opened
+// from a work file has none (only its blob). Compute + cache it on demand so
+// diff-recompute call sites (insert, replace) don't have to special-case this.
+// Returns null (rather than throwing) if the frame's blob fails to decode.
+export async function ensureLuma(frame, tctx) {
+  if (frame.luma) return frame.luma;
+  const url = URL.createObjectURL(frame.full);
+  const img = await loadImage(url).catch(() => null);
+  URL.revokeObjectURL(url);
+  if (!img) return null;
+  frame.luma = computeLuma(tctx, img);
+  return frame.luma;
 }

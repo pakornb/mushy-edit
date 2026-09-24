@@ -18,6 +18,27 @@ async function ensureFF() {
 
 function evenN(n) { n = Math.round(n); return n % 2 ? n + 1 : n; }
 
+// Builds ffmpeg's -af filter chain for master gain + fade in/out. `trimmedStart`
+// is how much was already cut off the front via -ss (negative offsetSec case) —
+// afade's own `st` is relative to what the filter actually sees, i.e. AFTER that
+// trim, so a fade-in always starts at st=0 (the first sample that plays) and a
+// fade-out is timed off the remaining (post-trim) duration, not the raw file's.
+function audioFilterChain(a, trimmedStart) {
+  const parts = [];
+  const gain = a.gain ?? 1;
+  if (Math.abs(gain - 1) > 1e-3) parts.push(`volume=${gain.toFixed(3)}`);
+  const fps = P.fps || 24;
+  const fadeInSec = (a.fadeInFrames || 0) / fps;
+  const fadeOutSec = (a.fadeOutFrames || 0) / fps;
+  if (fadeInSec > 0) parts.push(`afade=t=in:st=0:d=${fadeInSec.toFixed(3)}`);
+  if (fadeOutSec > 0 && a.duration) {
+    const audibleDur = Math.max(0, a.duration - trimmedStart);
+    const st = Math.max(0, audibleDur - fadeOutSec);
+    parts.push(`afade=t=out:st=${st.toFixed(3)}:d=${fadeOutSec.toFixed(3)}`);
+  }
+  return parts.join(',');
+}
+
 async function renderFrame(fi, W, H, burn) {
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
@@ -62,12 +83,18 @@ export async function exportMp4({ burnAnnotations = false, maxW = 0, onProgress 
     audioName = 'audio_in' + (/\.\w+$/.exec(a.name)?.[0] || '.wav');
     await f.writeFile(audioName, await fetchFile(a.blob));
     const off = a.offsetSec || 0;
+    const trimmedStart = off < 0 ? -off : 0; // -ss above cuts this much off the front
     if (off >= 0) args.push('-itsoffset', off.toFixed(3), '-i', audioName);
-    else args.push('-ss', (-off).toFixed(3), '-i', audioName);
+    else args.push('-ss', trimmedStart.toFixed(3), '-i', audioName);
     hasAudio = true;
   }
   args.push('-map', '0:v');
-  if (hasAudio) args.push('-map', '1:a', '-c:a', 'aac', '-b:a', '192k');
+  if (hasAudio) {
+    args.push('-map', '1:a', '-c:a', 'aac', '-b:a', '192k');
+    const trimmedStart = (a.offsetSec || 0) < 0 ? -(a.offsetSec || 0) : 0;
+    const af = audioFilterChain(a, trimmedStart);
+    if (af) args.push('-af', af);
+  }
   args.push('-r', String(fps), '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
     '-movflags', '+faststart', '-t', total.toFixed(3), 'out.mp4');
 

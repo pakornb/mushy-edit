@@ -31,7 +31,7 @@ export const project = {
   baseName: 'sequence',   // derived from first file / zip name
   resW: 1920, resH: 1080, // spot resolution (largest source image by default)
   source: null,           // 'files' | 'zip' | 'workfile'
-  audio: null,            // { name, blob, url, offsetSec, inSec, outSec } | null
+  audio: null,            // { name, blob, url, offsetSec, inSec, outSec, gain, fadeInFrames, fadeOutFrames } | null
   shots: [],              // computed: { start, end, count, name }
   cuts: new Set(),        // computed shot-start indices
 };
@@ -441,19 +441,51 @@ export function setAssetTaskVal(p, id, task, val) { const a = getAsset(p, id); i
 export function assetsByCat(p, cat) { return p.assets.filter((a) => a.cat === cat); }
 
 
+// Reorders p.frames/frameKeys/diffs to match a saved filename order (used by
+// undo/redo for insert/move — never re-derives images, only rearranges the
+// frame objects that are already in memory; a filename that no longer exists
+// — the OTHER side of the same undo step deleted it — is simply skipped, and
+// any current frame missing from `order` is left in place at the end so a
+// mismatched snapshot fails soft instead of dropping boards).
+function applyFrameOrder(p, order) {
+  if (!order) return;
+  const byName = new Map(p.frames.map((f) => [f.name, f]));
+  const reordered = order.map((n) => byName.get(n)).filter(Boolean);
+  const placed = new Set(reordered.map((f) => f.name));
+  p.frames.forEach((f) => { if (!placed.has(f.name)) reordered.push(f); });
+  p.frames = reordered;
+  p.frameKeys = p.frames.map((f) => shotKeyOf(f.name));
+  // Recompute diffs synchronously from whatever luma is already cached (true
+  // for any project loaded from images/zip — luma is computed at ingest).
+  // applyState() must stay synchronous for undo/redo, so a frame with no
+  // cached luma (only possible for a work-file-loaded project that's never
+  // had insert/replace touch it) falls back to 0 rather than blocking on a
+  // decode — 'cuts' grouping for that pair is stale until the next detect.
+  p.diffs = p.frames.map((f, i) => (i === 0 || !f.luma || !p.frames[i - 1].luma) ? 0 : diffLumaSync(p.frames[i - 1].luma, f.luma));
+}
+function diffLumaSync(a, b) {
+  let sum = 0;
+  for (let k = 0; k < a.length; k++) sum += Math.abs(a[k] - b[k]);
+  return sum / a.length / 2.55;
+}
+
 export function captureState(p = project) {
   return JSON.stringify({
     groupMode: p.groupMode, threshold: p.threshold, fps: p.fps,
     lenUnit: p.lenUnit, spotSeconds: p.spotSeconds,
     shotTasks: p.shotTasks, assetTasks: p.assetTasks, assetCats: p.assetCats,
     assets: p.assets.map((a) => ({ ...a, thumb: null })), // thumbs restored by id on apply
+    frameOrder: p.frames.map((f) => f.name),
     manualAdd: [...p.manualAdd], manualRemove: [...p.manualRemove],
     meta: [...p.meta.entries()],
     boardDur: [...p.boardDur.entries()],
     boardDisabled: [...p.boardDisabled], shotDisabled: [...p.shotDisabled],
     pinned: [...p.pinned], annos: [...p.annos.entries()],
     fitMode: p.fitMode, boardFit: [...p.boardFit.entries()],
-    audio: p.audio ? { offsetSec: p.audio.offsetSec, inSec: p.audio.inSec, outSec: p.audio.outSec } : null,
+    audio: p.audio ? {
+      offsetSec: p.audio.offsetSec, inSec: p.audio.inSec, outSec: p.audio.outSec,
+      gain: p.audio.gain, fadeInFrames: p.audio.fadeInFrames, fadeOutFrames: p.audio.fadeOutFrames,
+    } : null,
     lastRebalanceSpot: p.lastRebalanceSpot,
   });
 }
@@ -463,6 +495,7 @@ export function applyState(p, snap) {
   p.lenUnit = s.lenUnit; p.spotSeconds = s.spotSeconds;
   p.shotTasks = s.shotTasks || p.shotTasks; p.assetTasks = s.assetTasks || p.assetTasks; p.assetCats = s.assetCats || p.assetCats;
   if (s.assets) { const thumbs = new Map(p.assets.map((a) => [a.id, a.thumb])); p.assets = s.assets.map((a) => ({ ...a, thumb: a.thumb || thumbs.get(a.id) || null })); }
+  applyFrameOrder(p, s.frameOrder);
   p.manualAdd = new Set(s.manualAdd); p.manualRemove = new Set(s.manualRemove);
   p.meta = new Map(s.meta);
   p.boardDur = new Map(s.boardDur || []);
@@ -471,7 +504,10 @@ export function applyState(p, snap) {
   p.pinned = new Set(s.pinned || []);
   p.annos = new Map(s.annos || []);
   p.fitMode = s.fitMode || p.fitMode; p.boardFit = new Map(s.boardFit || []);
-  if (p.audio && s.audio) { p.audio.offsetSec = s.audio.offsetSec; p.audio.inSec = s.audio.inSec; p.audio.outSec = s.audio.outSec; }
+  if (p.audio && s.audio) {
+    p.audio.offsetSec = s.audio.offsetSec; p.audio.inSec = s.audio.inSec; p.audio.outSec = s.audio.outSec;
+    p.audio.gain = s.audio.gain; p.audio.fadeInFrames = s.audio.fadeInFrames; p.audio.fadeOutFrames = s.audio.fadeOutFrames;
+  }
   p.lastRebalanceSpot = s.lastRebalanceSpot ?? p.spotSeconds;
   computeShots(p);
 }

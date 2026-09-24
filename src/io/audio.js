@@ -16,7 +16,7 @@ export async function loadAudioFile(file) {
     // decode can fail for some codecs; fall back to <audio> duration, no waveform
     duration = await probeDuration(url);
   }
-  return { name: file.name, blob, url, duration, peaks, offsetSec: 0, inSec: null, outSec: null };
+  return { name: file.name, blob, url, duration, peaks, offsetSec: 0, inSec: null, outSec: null, gain: 1, fadeInFrames: 0, fadeOutFrames: 0 };
 }
 
 function computePeaks(audioBuf, buckets) {

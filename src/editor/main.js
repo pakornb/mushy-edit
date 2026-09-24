@@ -6,16 +6,17 @@ import {
   isShotStart, forceCut, mergeUp, fmtClock,
 } from '../core/model.js';
 import { createAnnotator, annotatorToolbar } from '../core/annotate.js';
-import { loadFromFiles, loadFromZip } from '../core/frames.js';
+import { loadFromFiles, loadFromZip, insertFrame, solidColorBlob, moveFrames } from '../core/frames.js';
 import { saveWorkFile, openWorkFile } from '../io/workfile.js';
 import { loadAudioFile, drawWaveform } from '../io/audio.js';
 import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
-import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture } from '../core/history.js';
+import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture, cancelGesture } from '../core/history.js';
 import { APPS_SCRIPT } from '../io/appsScript.js';
 import { openAssetWindow, openPreview, exportBreakdownJSON, setRefresh, closeModal } from './assets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
+import { exportEdlZip } from '../io/edl.js';
 
 const $ = (id) => document.getElementById(id);
 let cur = 0, lastShot = -1, pps = null;
@@ -27,6 +28,7 @@ let selAnchor = null;
 let resAspect = 16 / 9;
 let lastCurX = null;
 let annoMode = false, annoCtrl = null, lastAnnoFrame = -1;
+let insertMode = false, insertPending = null;
 
 function toggleAnnotate() {
   annoMode = !annoMode;
@@ -213,6 +215,14 @@ function buildTimeline() {
     slot.appendChild(c);
     if (bd.pinned) { const pb = document.createElement('span'); pb.className = 'pinbadge'; pb.textContent = '📌'; slot.appendChild(pb); }
     if (hasAnnos(P, bd.fi)) slot.classList.add('has-anno');
+    const gapL = document.createElement('div'); gapL.className = 'insert-gap left'; gapL.textContent = '+';
+    gapL.addEventListener('pointerdown', (e) => e.stopPropagation());
+    gapL.addEventListener('click', (e) => { e.stopPropagation(); if (insertMode) openInsertPopover(bd.fi, e.clientX, e.clientY); });
+    slot.appendChild(gapL);
+    const gapR = document.createElement('div'); gapR.className = 'insert-gap right'; gapR.textContent = '+';
+    gapR.addEventListener('pointerdown', (e) => e.stopPropagation());
+    gapR.addEventListener('click', (e) => { e.stopPropagation(); if (insertMode) openInsertPopover(bd.fi + 1, e.clientX, e.clientY); });
+    slot.appendChild(gapR);
     attachTile(slot, c, bd.fi);
     inner.insertBefore(slot, ph);
     slotEls.set(bd.fi, slot);
@@ -276,11 +286,119 @@ function selectExtend(dir) {
 function toggleHide(fi) { mutate(() => { const n = P.frames[fi].name; if (P.boardDisabled.has(n)) P.boardDisabled.delete(n); else P.boardDisabled.add(n); }); render(); }
 function togglePin(fi) { mutate(() => { const n = P.frames[fi].name; if (P.pinned.has(n)) P.pinned.delete(n); else P.pinned.add(n); }); render(); }
 
-// ---------- tile gestures (axis-locked) ----------
+// ---------- move / reorder boards ----------
+// `insertBeforeIndex` is a RAW p.frames array position (not a timeline/enabled-
+// flat position) — moveFrames() itself resolves that against wherever the
+// moving boards currently sit.
+function commitMove(idxs, insertBeforeIndex) {
+  beginGesture();
+  moveFrames(P, idxs, insertBeforeIndex).then((r) => {
+    if (!r) { cancelGesture(); return; }
+    selected = new Set(r.newIndices);
+    cur = r.newIndices[r.newIndices.length - 1] ?? cur;
+    selAnchor = cur;
+    computeShots(P);
+    commitGesture(); refreshUndoButtons(); render();
+    toast(`Moved ${idxs.length > 1 ? idxs.length + ' boards' : 'board'}`);
+  });
+}
+// Keyboard reorder: move the current board (or the whole selection, treated as
+// one block) one slot earlier/later among RAW array positions — i.e. it can
+// swap past a hidden board too, not just enabled ones (dir: -1 left, +1 right).
+function moveSelectionBy(dir) {
+  const idxs = selected.size ? [...selected] : [cur];
+  const sorted = idxs.slice().sort((a, b) => a - b);
+  let insertBefore;
+  if (dir < 0) { const first = sorted[0]; if (first <= 0) return; insertBefore = first - 1; }
+  else { const last = sorted[sorted.length - 1]; if (last >= P.frames.length - 1) return; insertBefore = last + 2; }
+  commitMove(idxs, insertBefore);
+}
+
+// ---------- insert a new board (upload or a blank/solid-color placeholder) ----------
+function toggleInsertMode() {
+  insertMode = !insertMode;
+  $('insertModeBtn').classList.toggle('on', insertMode);
+  $('tlInner').classList.toggle('insert-mode', insertMode);
+  closeInsertPopover();
+}
+function closeInsertPopover() {
+  const el = document.getElementById('insertPopover');
+  if (el) el.remove();
+  document.removeEventListener('pointerdown', onInsertPopoverOutside, true);
+}
+function onInsertPopoverOutside(e) {
+  const el = document.getElementById('insertPopover');
+  if (el && !el.contains(e.target)) closeInsertPopover();
+}
+function openInsertPopover(atIndex, clientX, clientY) {
+  closeInsertPopover();
+  insertPending = { atIndex };
+  const pop = document.createElement('div');
+  pop.className = 'insert-popover'; pop.id = 'insertPopover';
+  pop.style.left = Math.round(clientX) + 'px';
+  pop.style.top = Math.round(clientY) + 'px';
+  const upload = document.createElement('button'); upload.className = 'btn ghost sm'; upload.textContent = 'Upload image…';
+  upload.onclick = () => { closeInsertPopover(); $('insertFileInput').click(); };
+  pop.appendChild(upload);
+  const colorRow = document.createElement('div'); colorRow.className = 'ip-color-row';
+  const colorInp = document.createElement('input'); colorInp.type = 'color'; colorInp.value = '#808080';
+  const blankBtn = document.createElement('button'); blankBtn.className = 'btn ghost sm'; blankBtn.textContent = 'Blank frame';
+  blankBtn.onclick = () => { const c = colorInp.value; closeInsertPopover(); performInsertBlank(atIndex, c); };
+  colorRow.append(colorInp, blankBtn);
+  pop.appendChild(colorRow);
+  document.body.appendChild(pop);
+  setTimeout(() => document.addEventListener('pointerdown', onInsertPopoverOutside, true), 0);
+}
+function remapForInsert(atIndex) {
+  if (cur >= atIndex) cur++;
+  if (selAnchor != null && selAnchor >= atIndex) selAnchor++;
+  selected = new Set([...selected].map((i) => (i >= atIndex ? i + 1 : i)));
+}
+async function performInsertFile(atIndex, file) {
+  beginGesture();
+  const r = await insertFrame(P, atIndex, file);
+  if (!r) { cancelGesture(); toast('Could not read that image'); return; }
+  remapForInsert(atIndex);
+  computeShots(P);
+  commitGesture(); refreshUndoButtons(); render();
+  toast('Board inserted');
+}
+async function performInsertBlank(atIndex, color) {
+  const blob = await solidColorBlob(P.resW || 1920, P.resH || 1080, color);
+  const file = new File([blob], `blank_${Date.now().toString(36)}.png`, { type: 'image/png' });
+  await performInsertFile(atIndex, file);
+}
+
+// ---------- tile gestures (axis-locked retime/offset, or Alt+drag to reorder) ----------
 function attachTile(slot, imgCanvas, fi) {
   let downX = 0, downY = 0, axis = null, snap = null, moved = false;
+  let reordering = false, reorderMoved = false, reorderDropFi = null, reorderDropEl = null;
+
+  function updateReorderDropIndicator(clientX) {
+    const scRect = $('timeline').getBoundingClientRect();
+    const xIn = clientX - scRect.left + $('timeline').scrollLeft;
+    const boards = timeline(P).boards;
+    let target = P.frames.length, leftPx = innerScaleTotal() * pps;
+    for (const bd of boards) {
+      const bx = bd.startSec * pps, bw = Math.max(2, bd.len * pps), mid = bx + bw / 2;
+      if (xIn < mid) { target = bd.fi; leftPx = bx; break; }
+      target = bd.fi + 1; leftPx = bx + bw;
+    }
+    reorderDropFi = target;
+    if (!reorderDropEl) { reorderDropEl = document.createElement('div'); reorderDropEl.className = 'reorder-drop'; $('tlInner').appendChild(reorderDropEl); }
+    reorderDropEl.style.left = leftPx + 'px';
+  }
+  function clearReorderIndicator() { if (reorderDropEl) { reorderDropEl.remove(); reorderDropEl = null; } }
+
   imgCanvas.addEventListener('pointerdown', (e) => {
     if (e.metaKey || e.ctrlKey) { e.stopPropagation(); toggleSel(fi); return; }
+    if (e.altKey) {
+      e.stopPropagation(); reordering = true; reorderMoved = false; reorderDropFi = null;
+      imgCanvas.setPointerCapture(e.pointerId);
+      if (!selected.has(fi)) selected = new Set([fi]);
+      slot.classList.add('reordering');
+      return;
+    }
     downX = e.clientX; downY = e.clientY; axis = null; moved = false;
     imgCanvas.setPointerCapture(e.pointerId);
     // materialize all durations so the snapshot is complete/idempotent
@@ -289,6 +407,7 @@ function attachTile(slot, imgCanvas, fi) {
     if (!selected.has(fi)) selected = new Set([fi]);
   });
   imgCanvas.addEventListener('pointermove', (e) => {
+    if (reordering) { reorderMoved = true; updateReorderDropIndicator(e.clientX); return; }
     if (e.buttons === 0 || !snap) return;
     const dx = e.clientX - downX, dy = downY - e.clientY;
     if (!axis) { if (Math.max(Math.abs(dx), Math.abs(dy)) > 4) { axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'; beginGesture(); slot.classList.add('dragging'); } else return; }
@@ -308,6 +427,17 @@ function attachTile(slot, imgCanvas, fi) {
   });
   imgCanvas.addEventListener('pointerup', (e) => {
     imgCanvas.releasePointerCapture?.(e.pointerId);
+    if (reordering) {
+      slot.classList.remove('reordering');
+      clearReorderIndicator();
+      reordering = false;
+      if (reorderMoved && reorderDropFi != null) {
+        const idxs = selected.has(fi) && selected.size > 1 ? [...selected] : [fi];
+        commitMove(idxs, reorderDropFi);
+      }
+      reorderDropFi = null;
+      return;
+    }
     slot.classList.remove('dragging');
     if (axis && moved) { commitGesture(); refreshUndoButtons(); render(); }
     else { selectSingle(fi); }
@@ -351,7 +481,17 @@ function zoomFit() { pps = fitPps(); buildTimeline(); updatePlayhead(transport.s
 
 // ---------- audio ----------
 async function loadAudio(file) { try { overlay('Decoding audio…'); P.audio = await loadAudioFile(file); transport.mountAudio(); syncAudioUI(); toast('Audio loaded'); } catch (e) { console.error(e); toast('Could not load audio'); } finally { overlay(false); } }
-function syncAudioUI() { const has = !!P.audio; $('audioLane').classList.toggle('hidden', !has); $('audioName').textContent = has ? P.audio.name : ''; if (!has) { layoutAudioClip(); return; } drawSlipReadout(); $('useAudioLen').disabled = !P.audio.duration; layoutAudioClip(); }
+function syncAudioUI() {
+  const has = !!P.audio;
+  $('audioLane').classList.toggle('hidden', !has);
+  $('audioName').textContent = has ? P.audio.name : '';
+  if (!has) { layoutAudioClip(); return; }
+  drawSlipReadout(); $('useAudioLen').disabled = !P.audio.duration; layoutAudioClip();
+  const gain = P.audio.gain ?? 1;
+  $('audioGain').value = gain; $('audioGainVal').textContent = Math.round(gain * 100) + '%';
+  $('fadeInFrames').value = P.audio.fadeInFrames || 0;
+  $('fadeOutFrames').value = P.audio.fadeOutFrames || 0;
+}
 function layoutAudioClip() {
   let clip = document.getElementById('audioClip');
   if (!P.audio) { if (clip) clip.remove(); return; }
@@ -403,8 +543,8 @@ function arrowRetime(dir, big) {
   });
   render();
 }
-function doUndo() { if (undo()) { render(); onTick(transport.sec, false); toast('Undo'); } }
-function doRedo() { if (redo()) { render(); onTick(transport.sec, false); toast('Redo'); } }
+function doUndo() { if (undo()) { render(); syncAudioUI(); onTick(transport.sec, false); toast('Undo'); } }
+function doRedo() { if (redo()) { render(); syncAudioUI(); onTick(transport.sec, false); toast('Redo'); } }
 
 function clearSelection() { selected.clear(); render(); }
 let marqEl = null, marqX0 = 0;
@@ -504,6 +644,11 @@ function wire() {
     try { overlay('Building viewer…'); await exportViewer(); toast('Viewer JSON exported — open in view.html'); }
     catch (e) { console.error(e); toast('Viewer export failed'); } finally { overlay(false); }
   };
+  $('mEdl').onclick = async () => {
+    $('exportMenu').classList.add('hidden');
+    try { await exportEdlZip((msg) => overlay(msg)); toast('EDL package downloaded'); }
+    catch (e) { console.error(e); toast(e.message || 'EDL export failed'); } finally { overlay(false); }
+  };
   $('autoBtn').onclick = () => { mutate(() => { const r = autoEstimate(P); toast(`Estimated ${r.filled} boards → ${fmtClock(r.total)}`); }); render(); };
   $('rebalBtn').onclick = () => { mutate(() => { const r = rebalance(P); toast(`Rebalanced → ${fmtClock(r.total)}`); }); render(); };
   $('cutBtn').onclick = toggleCut;
@@ -539,6 +684,21 @@ function wire() {
   $('setSync').onclick = setSyncToPlayhead;
   $('removeAudio').onclick = removeAudio;
   $('useAudioLen').onclick = () => { if (P.audio?.duration) { mutate(() => { P.spotSeconds = Math.round(P.audio.duration * 100) / 100; }); $('spot').value = P.spotSeconds; render(); toast('Spot set to audio length'); } };
+  $('audioGain').addEventListener('focus', beginGesture);
+  $('audioGain').addEventListener('input', (e) => { if (!P.audio) return; P.audio.gain = +e.target.value; $('audioGainVal').textContent = Math.round(P.audio.gain * 100) + '%'; });
+  $('audioGain').addEventListener('change', () => { commitGesture(); refreshUndoButtons(); });
+  $('fadeInFrames').addEventListener('focus', beginGesture);
+  $('fadeInFrames').addEventListener('input', (e) => { if (!P.audio) return; P.audio.fadeInFrames = Math.max(0, Math.round(+e.target.value || 0)); });
+  $('fadeInFrames').addEventListener('change', () => { commitGesture(); refreshUndoButtons(); });
+  $('fadeOutFrames').addEventListener('focus', beginGesture);
+  $('fadeOutFrames').addEventListener('input', (e) => { if (!P.audio) return; P.audio.fadeOutFrames = Math.max(0, Math.round(+e.target.value || 0)); });
+  $('fadeOutFrames').addEventListener('change', () => { commitGesture(); refreshUndoButtons(); });
+
+  $('insertModeBtn').onclick = toggleInsertMode;
+  $('insertFileInput').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (f && insertPending) { await performInsertFile(insertPending.atIndex, f); insertPending = null; }
+  };
 
   ['dragenter', 'dragover'].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); const d = $('drop'); if (d) d.classList.add('hot'); }));
   ['dragleave', 'drop'].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); if (ev === 'dragleave' && e.relatedTarget) return; const d = $('drop'); if (d) d.classList.remove('hot'); }));
@@ -550,7 +710,7 @@ function wire() {
     if (typing || !P.frames.length) return;
     const k = e.key;
     if (k === ' ') { if (/button/i.test(e.target.tagName)) return; e.preventDefault(); transport.toggle(); return; }
-    if (k === 'Escape') { if (document.getElementById('activeModal')) { closeModal(); } else if (annoMode) { toggleAnnotate(); } else clearSelection(); return; }
+    if (k === 'Escape') { if (document.getElementById('activeModal')) { closeModal(); } else if (annoMode) { toggleAnnotate(); } else if (insertMode) { toggleInsertMode(); } else clearSelection(); return; }
     if (k === 'h' || k === 'H') { e.preventDefault(); toggleHide(cur); return; }
     if (k === 'p' || k === 'P') { e.preventDefault(); togglePin(cur); return; }
     if (k === 'c' || k === 'C') { e.preventDefault(); toggleCut(); return; }
@@ -558,7 +718,8 @@ function wire() {
     if (k === '-' || k === '_') { e.preventDefault(); setZoom(1 / 1.6); return; }
     if (k === 'ArrowRight' || k === 'ArrowLeft') {
       e.preventDefault(); const dir = k === 'ArrowRight' ? 1 : -1;
-      if (e.metaKey || e.ctrlKey) transport.seek(dir > 0 ? timeline(P).total : 0);
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey) moveSelectionBy(dir);
+      else if (e.metaKey || e.ctrlKey) transport.seek(dir > 0 ? timeline(P).total : 0);
       else if (e.shiftKey) selectExtend(dir);
       else if (e.altKey) shotNav(dir);
       else boardNav(dir);

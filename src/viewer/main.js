@@ -26,6 +26,24 @@ async function load(data) {
 
 function boardAt(sec) { let i = 0; for (let k = 0; k < starts.length; k++) { if (starts[k] <= sec + 1e-6) i = k; else break; } return i; }
 
+// Master gain + linear fade in/out (lengths given in frames, converted via the
+// project's fps) — mirrors what mp4 export bakes in with ffmpeg's afade, so the
+// viewer is an honest preview of the exported file, not just the visuals.
+function audioVolumeAt(sec) {
+  if (!V.audio) return 0;
+  const at = sec - (V.audio.offsetSec || 0);
+  if (at < 0) return 0;
+  const gain = Math.max(0, Math.min(1, V.audio.gain ?? 1));
+  const fps = V.fps || 24;
+  const fadeInSec = (V.audio.fadeInFrames || 0) / fps;
+  const fadeOutSec = (V.audio.fadeOutFrames || 0) / fps;
+  const dur = (audioEl && isFinite(audioEl.duration)) ? audioEl.duration : null;
+  let mult = 1;
+  if (fadeInSec > 0 && at < fadeInSec) mult = Math.min(mult, Math.max(0, at / fadeInSec));
+  if (dur != null && fadeOutSec > 0 && at > dur - fadeOutSec) mult = Math.min(mult, Math.max(0, (dur - at) / fadeOutSec));
+  return gain * mult;
+}
+
 function fitRect(mode, iw, ih, W, H) {
   if (!iw || !ih) return { dx: 0, dy: 0, dw: W, dh: H };
   let s;
@@ -57,12 +75,13 @@ function frame(ts) {
   if (!lastTs) lastTs = ts;
   t += (ts - lastTs) / 1000; lastTs = ts;
   if (t >= V.total) { t = V.total; pause(); }
+  if (audioEl) audioEl.volume = audioVolumeAt(t);
   drawAt(t); updateClock();
   if (playing) raf = requestAnimationFrame(frame);
 }
 function play() {
   if (!V || playing) return; playing = true; lastTs = 0;
-  if (audioEl) { const at = t - (V.audio.offsetSec || 0); if (at >= 0) { audioEl.currentTime = Math.min(Math.max(0, at), audioEl.duration || at); audioEl.play().catch(() => {}); } }
+  if (audioEl) { const at = t - (V.audio.offsetSec || 0); if (at >= 0) { audioEl.currentTime = Math.min(Math.max(0, at), audioEl.duration || at); audioEl.volume = audioVolumeAt(t); audioEl.play().catch(() => {}); } }
   raf = requestAnimationFrame(frame); updateClock();
 }
 function pause() { playing = false; cancelAnimationFrame(raf); if (audioEl) audioEl.pause(); updateClock(); }
