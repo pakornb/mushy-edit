@@ -11,12 +11,16 @@
 // secret (client IDs are public by design), and never changes per show, so
 // it's hardcoded here rather than something every artist re-enters.
 //
-// deploymentId, by contrast, IS specific to one Sheet's own deployed script —
-// every show needs its own. It's passed in by the caller (assets.js), which
-// reads it from project.sheetsDeploymentId — set once by whoever wires up
-// that show's Sheet, then saved in the work file so it travels with the
-// project for every artist who opens it. Never store it in this browser's
-// localStorage; that would mean re-entering it per browser/profile.
+// deploymentId identifies which Sheet's deployed script to call. Most
+// projects never need to think about this: DEFAULT_DEPLOYMENT_ID points at
+// the one shared "Mushy Edit Breakdowns" Sheet, so Build/Update (direct)
+// work with zero configuration out of the box, landing every show's
+// breakdown as its own timestamped tab in that one Sheet. A project can
+// still opt into its OWN separate Sheet via project.sheetsDeploymentId (set
+// once via "Use a separate Google Sheet for this project…", saved in the
+// work file) — that override, when present, always wins over the default.
+// Never move deployment ID into this browser's localStorage; that would
+// reintroduce "re-enter it per browser/profile."
 //
 // UNVERIFIED AGAINST A REAL DEPLOYMENT: the request/response shape here
 // follows Google's documented scripts.run contract, but the exact error
@@ -25,6 +29,7 @@
 // unexpected.
 
 const CLIENT_ID = '902841680403-3ua13oavs9ic6m4i1e6si7hl2b0q3qup.apps.googleusercontent.com';
+export const DEFAULT_DEPLOYMENT_ID = 'AKfycbxhjhPrngLQwuYR3FW91iBes-67IEb6pbRxRA9XTtjg5lCOX98LvN8ElRhjKbWUhTzcXw';
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/script.scriptapp';
 
 let gisReady = null;

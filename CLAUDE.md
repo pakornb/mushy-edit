@@ -131,15 +131,17 @@ just `npm install && npm run build` in place. Always run a build before committi
   so it gets every existing dispatch (composite/per-row, shot-list/contact-sheet) for free. One-time
   setup (done once per Sheet by whoever administers it, not by every artist) is documented in the
   header comment of the `.gs` — GCP project + OAuth client + "API Executable" deployment.
-  **Config split by scope, not dumped in `localStorage`**: the OAuth Client ID (`CLIENT_ID` in
-  `sheetsApi.js`) is hardcoded — it's the shared `hornet-tools` client, isn't a secret, and is the
-  same for every Hornet tool/show, so there's nothing for any artist to enter. The deployment ID,
-  by contrast, is specific to one show's own deployed script, so it lives on **`project.sheetsDeploymentId`**
-  (added to `captureState`/`applyState` and `workfile.js` save+open like any other persistent field)
-  — set once via Export → "Set Google Sheet deployment ID…" (`promptSheetsDeploymentId` in
-  `assets.js`) by whoever wires up that show's Sheet, then it's saved in the work file and every
-  artist who opens that file already has it. Never move deployment ID back into `localStorage` —
-  that reintroduces exactly the "reconfigure per browser" problem this design avoids.
+  **Zero configuration by default**: the OAuth Client ID (`CLIENT_ID` in `sheetsApi.js`) is
+  hardcoded — it's the shared `hornet-tools` client, isn't a secret, and is the same for every
+  Hornet tool/show. The deployment ID defaults to `DEFAULT_DEPLOYMENT_ID` (also hardcoded), which
+  points at one shared "Mushy Edit Breakdowns" Sheet — every project's Build/Update (direct) just
+  works out of the box, landing that project's breakdown as its own timestamped tab in that one
+  Sheet. **`project.sheetsDeploymentId`** is an *optional* per-project override (added to
+  `captureState`/`applyState` and `workfile.js` save+open like any other persistent field, resolved
+  in `resolveDeploymentId()` in `assets.js`) for a project that specifically wants its own separate
+  Sheet — set via Export → "Use a separate Google Sheet for this project…"
+  (`promptSheetsDeploymentId`), saved in the work file so it travels with that project. Never move
+  either ID into this browser's `localStorage` — that reintroduces "reconfigure per browser."
   - **"Update active sheet (direct)"** (`sendUpdateDirect` in `assets.js`) reimplements
     `updateActiveSheet`'s own by-name matching **client-side**: it calls `apiSyncSheetState()` for
     the sheet's current Name-column row order, reconciles it against the live project (existing rows

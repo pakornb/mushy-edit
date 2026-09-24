@@ -5,7 +5,7 @@ import {
 } from '../core/model.js';
 import { mutate } from '../core/history.js';
 import { createAnnotator, annotatorToolbar, drawAnnos } from '../core/annotate.js';
-import { apiBuild, apiSyncSheetState, apiUpdateComposite } from '../io/sheetsApi.js';
+import { apiBuild, apiSyncSheetState, apiUpdateComposite, DEFAULT_DEPLOYMENT_ID } from '../io/sheetsApi.js';
 
 let refresh = () => {};
 export function setRefresh(fn) { refresh = fn; }
@@ -154,24 +154,24 @@ export async function exportBreakdownCompositeJSON() {
 // ---------- direct-to-Sheets export (experimental, no file step) ----------
 // Signed-in-user version of the composite export: calls the Apps Script
 // Execution API (sheetsApi.js) instead of downloading + picking a JSON file.
-// deploymentId lives on the PROJECT (saved in the work file), not this
-// browser's localStorage — set once per show, then every artist who opens
-// that file already has it. See setSheetsDeploymentId()/promptSheetsDeploymentId().
+// No configuration needed by default — projects use the one shared Sheet
+// (DEFAULT_DEPLOYMENT_ID). project.sheetsDeploymentId is an OPTIONAL
+// per-project override (saved in the work file, so it travels with the
+// project) for anyone who wants a show to land in its own separate Sheet.
 export function setSheetsDeploymentId(id) { mutate(() => { P.sheetsDeploymentId = (id || '').trim(); }); }
 export function promptSheetsDeploymentId() {
-  const id = (prompt('Apps Script API-executable deployment ID for this show’s Sheet (Deploy → Manage deployments in that Sheet’s Apps Script editor):', P.sheetsDeploymentId || '') || '').trim();
+  const id = (prompt('Apps Script API-executable deployment ID for a Sheet dedicated to this project (leave using the shared Sheet unless you specifically want one of your own):', P.sheetsDeploymentId || '') || '').trim();
   if (!id) return false;
   setSheetsDeploymentId(id);
   return true;
 }
 
-function requireDeploymentId() {
-  if (!P.sheetsDeploymentId) throw new Error('No Google Sheet deployment ID set for this project — use "Set Google Sheet deployment ID…" first.');
-  return P.sheetsDeploymentId;
+function resolveDeploymentId() {
+  return P.sheetsDeploymentId || DEFAULT_DEPLOYMENT_ID;
 }
 
 export async function sendBuildDirect() {
-  const deploymentId = requireDeploymentId();
+  const deploymentId = resolveDeploymentId();
   const data = await buildBreakdownDataComposite();
   return apiBuild(data, deploymentId);
 }
@@ -188,7 +188,7 @@ export async function sendBuildDirect() {
  * as new, in project order — same shape updateActiveSheet() produces.
  */
 export async function sendUpdateDirect() {
-  const deploymentId = requireDeploymentId();
+  const deploymentId = resolveDeploymentId();
   const sync = await apiSyncSheetState(deploymentId);
   const existingNames = (sync && sync.names) || [];
   if (!existingNames.length) throw new Error('No existing breakdown rows found — use "Build new sheet (direct)" first.');
