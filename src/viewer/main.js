@@ -1,5 +1,6 @@
 import '../style.css';
 import { drawAnnos } from '../core/annotate.js';
+import { easeInOut } from '../core/model.js';
 
 const $ = (id) => document.getElementById(id);
 let V = null;          // viewer data
@@ -26,9 +27,16 @@ async function load(data) {
 
 function boardAt(sec) { let i = 0; for (let k = 0; k < starts.length; k++) { if (starts[k] <= sec + 1e-6) i = k; else break; } return i; }
 
-// Master gain + linear fade in/out (lengths given in frames, converted via the
+// Master gain + eased (S-curve) fade in/out (lengths given in frames, converted via the
 // project's fps) — mirrors what mp4 export bakes in with ffmpeg's afade, so the
 // viewer is an honest preview of the exported file, not just the visuals.
+// Fade-out is anchored to the VIDEO timeline's own end (V.total), not the raw
+// audio file's length — a long music track under a short spot would otherwise
+// place the fade-out point past anything that ever actually plays. Fade-in is
+// symmetric: anchored to whenever the audio first becomes audible in the
+// video (never earlier than t=0), not to position within the raw file — a
+// negative offsetSec (trimmed to start before the video) would otherwise
+// begin playback already partway through the fade instead of a fresh one.
 function audioVolumeAt(sec) {
   if (!V.audio) return 0;
   const at = sec - (V.audio.offsetSec || 0);
@@ -37,10 +45,10 @@ function audioVolumeAt(sec) {
   const fps = V.fps || 24;
   const fadeInSec = (V.audio.fadeInFrames || 0) / fps;
   const fadeOutSec = (V.audio.fadeOutFrames || 0) / fps;
-  const dur = (audioEl && isFinite(audioEl.duration)) ? audioEl.duration : null;
+  const fadeInAt = sec - Math.max(0, V.audio.offsetSec || 0);
   let mult = 1;
-  if (fadeInSec > 0 && at < fadeInSec) mult = Math.min(mult, Math.max(0, at / fadeInSec));
-  if (dur != null && fadeOutSec > 0 && at > dur - fadeOutSec) mult = Math.min(mult, Math.max(0, (dur - at) / fadeOutSec));
+  if (fadeInSec > 0 && fadeInAt < fadeInSec) mult = Math.min(mult, easeInOut(Math.max(0, fadeInAt) / fadeInSec));
+  if (fadeOutSec > 0 && sec > V.total - fadeOutSec) mult = Math.min(mult, easeInOut((V.total - sec) / fadeOutSec));
   return gain * mult;
 }
 

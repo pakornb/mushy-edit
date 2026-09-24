@@ -89,6 +89,11 @@ just `npm install && npm run build` in place. Always run a build before committi
 - **Annotations are image-relative:** when passing to `drawAnnos`/`getImageRect`, remember the
   annotator's rect uses keys `{x,y,w,h}` while `fitRect` returns `{dx,dy,dw,dh}` — **map them**
   (`{x:r.dx,y:r.dy,w:r.dw,h:r.dh}`). A past bug (blank strokes) was passing the raw `fitRect` object.
+- **The main editor's `drawPreview()` (`main.js`) now also draws annotations**, not just the
+  image — it didn't before, which meant strokes only ever appeared on the interactive annotator's
+  own overlay canvas (destroyed the moment you left annotate mode) and never during ordinary
+  viewing/playback, even though mp4 export and the viewer both already drew them correctly. See
+  the gotcha below on why leaving annotate mode needs a forced redraw, not just relying on this.
 
 ## mp4 export (do not "optimize" back into breakage)
 - Uses **single-threaded** `@ffmpeg/core@0.12.6` loaded from unpkg via `toBlobURL`.
@@ -124,6 +129,12 @@ just `npm install && npm run build` in place. Always run a build before committi
      tool). Deliberately a popover, not a menu — see item 4 below on why menus were rejected here.
      Frame Splitter is NOT wired into mid-timeline insert (only the very first import screen) —
      deliberately out of scope for now; re-open the sheet in Frame Splitter and use insert instead.
+     Default duration for the new board is the **average of its two new neighbors'** durations
+     (falls back to whichever one exists at an edge) — a flat 1-frame default was technically
+     correct but invisible at the timeline's normal zoom, forcing a zoom-in just to see/grab it.
+     Timeline tiles also now **tile the thumbnail image** across a board's actual width
+     (`buildTimeline()` in `main.js`) instead of drawing it once at a fixed ~107px and leaving
+     the rest of a long board's block black.
    - "Update images (preserve timing)": re-ingest a folder/zip, **match by filename**, swap pixels
      while keeping all timing/pins/disables/annotations/tags. New filenames = new boards to place.
      Renamed files break the key (note it; a relink UI is a possible follow-on). **DONE** — this is
@@ -147,24 +158,44 @@ just `npm install && npm run build` in place. Always run a build before committi
      at once). Undoable: `captureState()`/`applyState()` now also snapshot/restore frame order (by
      filename — see the Conventions note below on why this was previously missing entirely, for
      insert too).
-3. **Audio: master gain + fade in/out. DONE.** `p.audio.gain` (0–2 linear multiplier) and
-   `fadeInFrames`/`fadeOutFrames` (length typed in **frames**, converted via `p.fps` — not
-   seconds, so it stays in sync if fps changes). Applied in three places, matching the
-   preview/mp4/viewer parity goal above:
+3. **Audio: master gain + fade in/out. DONE** (went through several correctness passes — see
+   "Things that have bitten us" below before touching this again). `p.audio.gain` (0–2 linear
+   multiplier) and `fadeInFrames`/`fadeOutFrames` (length typed in **frames**, converted via
+   `p.fps` — not seconds, so it stays in sync if fps changes). Applied in **all three** places,
+   matching the preview/mp4/viewer parity goal above — the editor's own playback is no longer
+   the one place none of this was audible:
+   - **Editor** (`transport.js` `Transport._audioVolume()`) — recomputed into `audioEl.volume`
+     every rAF tick during playback, on every `seek()`/`_syncAudio()`, and live while dragging the
+     gain/fade-frame inputs (`main.js`'s `refreshLiveVolume()`).
+   - **Viewer** (`viewer.js` export + `src/viewer/main.js` `audioVolumeAt()`) — its rAF loop
+     already ticks every playback frame, so it recomputes `audioEl.volume` live each tick too.
    - **mp4 export** (`mp4.js` `audioFilterChain()`) — bakes an `-af` chain: `volume=` (only if
-     ≠1) + `afade=t=in:st=0:...` + `afade=t=out:st=<audibleDur-fadeOutSec>:...`. `st=0` for the
-     fade-in is deliberate: ffmpeg's `afade` timing is relative to what the filter actually sees,
-     which is already past any `-ss` trim (negative `offsetSec`), so it's always "the first sample
-     that plays," not the raw file's start. Fade-out needs `a.duration` to know where the clip
-     ends — silently skipped (gain still applies) if that's missing, which happens for audio
-     reloaded from a work file (duration was never persisted there — a pre-existing gap, not new).
-   - **Viewer** (`viewer.js` export + `src/viewer/main.js` playback) — the viewer's rAF loop
-     already ticks every playback frame, so it recomputes `audioEl.volume` live each tick
-     (`audioVolumeAt()`), making the fade genuinely audible on review — unlike the main editor.
-   - **Main editor**: deliberately does NOT play the fade live during scrubbing/playback (only
-     gain could cheaply apply there via `audioEl.volume`, and even that isn't wired up) — the
-     editor's `<audio>``Transport` was left alone; treat this as scoped out unless it turns out
-     to matter in practice.
+     ≠1) + `afade=t=in:st=0:...:curve=hsin` + `afade=t=out:st=<...>:...:curve=hsin`.
+   - **Both fade ends are anchored to the VIDEO TIMELINE, never to the raw audio file.** Fade-out
+     ends at the video's own total duration (`this.total()` / `V.total` / the `videoTotal` param
+     threaded into `audioFilterChain()`) — anchoring to the file's own (possibly much longer,
+     e.g. a full music track) length meant the fade-out point could sit past anything that ever
+     actually renders. Fade-in starts at `max(0, offsetSec)` — i.e. whenever the audio first
+     becomes audible in the video, never earlier than t=0 — anchoring to raw file position
+     (`sec - offsetSec` with no floor) meant a clip trimmed to start playing *before* the video
+     (negative `offsetSec`, via `-ss`) began playback already partway through the fade instead of
+     a fresh one. `mp4.js` didn't need the fade-in fix: ffmpeg's own `-ss` trim already resets
+     that stream's internal clock to 0 at the trim point, so `afade`'s `st=0` was already correct
+     there — only the hand-rolled JS versions (editor + viewer) had the bug.
+   - **Curve: eased (smoothstep S-curve), not linear** — `easeInOut()` in `model.js`, the same
+     formula as `falloffWeight`'s `'smooth'` case, reused for consistency rather than introducing
+     a second curve implementation. ffmpeg's closest built-in match is `curve=hsin` (half-sine);
+     exact numeric equivalence with the JS smoothstep isn't the point, both are S-curves with zero
+     slope at the boundaries and read the same to the ear/eye.
+   - **Visual fade indicator** on the audio waveform clip (`audio.js` `drawFadeTriangle()`,
+     wired from `main.js` `layoutAudioClip()`) — a shaded region + the actual eased gain curve
+     (not a straight diagonal), positioned in **video-timeline space**, not clip-local space:
+     fade-out's pixel position is computed from `timeline(P).total`, and fade-in's start pixel is
+     `max(0, -offsetSec) * pps` (nonzero — i.e. shifted right, *into* the clip — only when
+     `offsetSec` is negative), so both indicators land exactly where the audible fade actually is,
+     including the case where a long audio file's fade-out point is well before its own visual
+     right edge. Must be redrawn (`layoutAudioClip()`, not just repositioning the clip `<div>`)
+     on every offset change, including mid-drag — see the gotcha below.
    - UI lives in the audio lane (`index.html`): a gain slider + two frame-count number inputs.
 4. **EDL export. DONE** (as a **zip package**, not a bare `.edl` file — deliberately, so it's
    self-contained/relinkable without hunting down the original images separately). `src/io/edl.js`
@@ -194,14 +225,45 @@ just `npm install && npm run build` in place. Always run a build before committi
    - **EDL (this exact format, bare file, no zip): not started** — item 4 above covers the
      zip-packaged version that was actually asked for; a bare `.edl` export (no bundled images)
      would be a small addition to `edl.js` if ever needed on its own.
-3. Ongoing **feel-tuning** constants: `SEC_PER_PX` drag sensitivity (~0.012), default falloff
+6. Ongoing **feel-tuning** constants: `SEC_PER_PX` drag sensitivity (~0.012), default falloff
    reach/curve, horizontal-offset mushiness. These are "play with real boards and adjust", not spec.
-4. **UI clarity pass on the Boards/Shots property panels** (inspector.js) — noted for later, NOT
+7. **UI clarity pass on the Boards/Shots property panels** (inspector.js) — noted for later, NOT
    started. Reduce clutter and make state easier to read at a glance: the board action row (hide/
    pin/cut/reset, currently four separate icon buttons), the Shot section header (disable/pin
    icons), the Tasks grid. Discuss the approach before touching this — don't assume grouping
    controls into a menu is the right fix; that was tried once and reverted (lost the icon
    affordance without being asked to make that trade).
+
+## Things that have bitten us (avoid regressions)
+- **`imgCache` (`main.js`) must be keyed by filename, never by array index.** It caches the
+  loaded `Image` used to paint the preview canvas. Insert and reorder both change which frame
+  sits at a given array position — an index-keyed cache would confidently hand back the *old*
+  image for that index after either operation, i.e. the preview would keep showing stale content
+  even though the model was already correct. This was the actual root cause of "insert/move don't
+  update the canvas," and it was subtle because the timeline DOM (rebuilt fresh every render) and
+  the model state both looked right; only the cached `Image` object was stale.
+- **`onTick()`'s repaint guard (`if (r.frame !== previewFi) drawPreview(...)`) assumes an index
+  always refers to the same board.** Insert/reorder break that assumption the same way as above:
+  selecting "index N" right after something changed what's *at* index N looks like a no-op to this
+  check. `selectSingle()`/`selectSet()` (`main.js`) reset `previewFi = -1` first specifically to
+  defeat this guard — any new code path that jumps the played/selected frame after a structural
+  edit needs the same reset, or the canvas silently keeps showing whatever was there before.
+- **The interactive annotator draws only to its own overlay `<canvas>`** (`createAnnotator()` in
+  `annotate.js`), destroyed the moment annotate mode exits. `exitAnnotate()` (`main.js`) must force
+  a `drawPreview()` afterward (also resetting `previewFi = -1` per above) or the strokes just
+  committed appear to vanish — the underlying canvas last painted *before* they existed, and
+  nothing tells it to repaint until something unrelated (e.g. scrubbing away and back) happens to.
+- **Dragging the audio clip (`attachAudioClipDrag()` in `main.js`) must call `layoutAudioClip()`
+  on every `pointermove`, not just update `P.audio.offsetSec` and the clip `<div>`'s `left` style.**
+  The fade-in/out indicators are baked into the waveform canvas at fixed pixel positions computed
+  from the offset *at the time it was last drawn* — if only the div moves, the canvas (and its
+  indicators) just rides along with it, silently drifting out of sync with where the fade actually
+  is. The other ways to change `offsetSec` (nudge buttons, sync-to-playhead) already called
+  `layoutAudioClip()`; only the drag path was missing it.
+- **Both audio fade ends must be anchored to the VIDEO TIMELINE (start/end), never to the raw
+  audio file.** Two separate bugs came from this, one per end — see the Audio item above for the
+  fix; the general lesson is that any time-based calc here should ask "where does this line up in
+  the *video*" before reaching for `offsetSec`/`a.duration`/`audioEl.duration` directly.
 
 ## Conventions
 - Vanilla JS, terse but readable; no new frameworks/deps without good reason.

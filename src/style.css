@@ -128,7 +128,7 @@ header .sep{width:1px;height:18px;background:var(--line);margin:0 2px}
 
 /* ---- reorder drag (Alt+drag a tile) ---- */
 .slot.reordering{opacity:.5;z-index:6}
-.reorder-drop{position:absolute;top:22px;bottom:6px;width:3px;background:var(--head);z-index:7;pointer-events:none;box-shadow:0 0 4px var(--head)}
+.reorder-drop{position:absolute;top:26px;height:74px;width:2px;background:var(--head);z-index:7;pointer-events:none;box-shadow:0 0 3px var(--head)}
 
 /* inspector board cells */
 .board-cell{width:calc(33.3% - 3px);display:flex;flex-direction:column;gap:3px}

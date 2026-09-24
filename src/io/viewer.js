@@ -14,6 +14,7 @@ export async function buildViewerData() {
     audio = {
       name: P.audio.name, offsetSec: P.audio.offsetSec || 0,
       gain: P.audio.gain ?? 1, fadeInFrames: P.audio.fadeInFrames || 0, fadeOutFrames: P.audio.fadeOutFrames || 0,
+      duration: P.audio.duration || 0,
       dataURL: await blobToDataURL(P.audio.blob),
     };
   }

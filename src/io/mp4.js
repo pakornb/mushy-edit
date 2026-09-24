@@ -18,23 +18,34 @@ async function ensureFF() {
 
 function evenN(n) { n = Math.round(n); return n % 2 ? n + 1 : n; }
 
-// Builds ffmpeg's -af filter chain for master gain + fade in/out. `trimmedStart`
-// is how much was already cut off the front via -ss (negative offsetSec case) —
-// afade's own `st` is relative to what the filter actually sees, i.e. AFTER that
-// trim, so a fade-in always starts at st=0 (the first sample that plays) and a
-// fade-out is timed off the remaining (post-trim) duration, not the raw file's.
-function audioFilterChain(a, trimmedStart) {
+// Builds ffmpeg's -af filter chain for master gain + fade in/out.
+// afade's `st` is relative to what the filter actually sees: for the -ss
+// trimmed case (negative offsetSec) the stream's own internal clock already
+// starts at 0 there, matching output time 1:1, so a fade-in always starts at
+// st=0 (the first sample that plays). Fade-out is anchored to the VIDEO
+// timeline's own end (`videoTotal`, i.e. the actual exported duration), not
+// the raw audio file's length — translated back into the filtered stream's
+// own time by subtracting any +itsoffset shift (the -ss case needs none,
+// since that stream's clock already matches output time). Anchoring to the
+// file's own (possibly much longer, e.g. a full music track) duration meant
+// the fade-out point could sit past anything that ever actually gets
+// rendered, so it never fired.
+function audioFilterChain(a, videoTotal) {
   const parts = [];
   const gain = a.gain ?? 1;
   if (Math.abs(gain - 1) > 1e-3) parts.push(`volume=${gain.toFixed(3)}`);
   const fps = P.fps || 24;
   const fadeInSec = (a.fadeInFrames || 0) / fps;
   const fadeOutSec = (a.fadeOutFrames || 0) / fps;
-  if (fadeInSec > 0) parts.push(`afade=t=in:st=0:d=${fadeInSec.toFixed(3)}`);
-  if (fadeOutSec > 0 && a.duration) {
-    const audibleDur = Math.max(0, a.duration - trimmedStart);
-    const st = Math.max(0, audibleDur - fadeOutSec);
-    parts.push(`afade=t=out:st=${st.toFixed(3)}:d=${fadeOutSec.toFixed(3)}`);
+  // curve=hsin (half-sine) is ffmpeg's closest built-in match to the
+  // smoothstep S-curve used everywhere else here (editor + viewer) — the
+  // default curve=tri is a plain linear ramp, which has an abrupt slope
+  // change right at the fade boundary.
+  if (fadeInSec > 0) parts.push(`afade=t=in:st=0:d=${fadeInSec.toFixed(3)}:curve=hsin`);
+  if (fadeOutSec > 0) {
+    const stEnd = videoTotal - Math.max(0, a.offsetSec || 0);
+    const st = Math.max(0, stEnd - fadeOutSec);
+    parts.push(`afade=t=out:st=${st.toFixed(3)}:d=${fadeOutSec.toFixed(3)}:curve=hsin`);
   }
   return parts.join(',');
 }
@@ -91,8 +102,7 @@ export async function exportMp4({ burnAnnotations = false, maxW = 0, onProgress 
   args.push('-map', '0:v');
   if (hasAudio) {
     args.push('-map', '1:a', '-c:a', 'aac', '-b:a', '192k');
-    const trimmedStart = (a.offsetSec || 0) < 0 ? -(a.offsetSec || 0) : 0;
-    const af = audioFilterChain(a, trimmedStart);
+    const af = audioFilterChain(a, total);
     if (af) args.push('-af', af);
   }
   args.push('-r', String(fps), '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',

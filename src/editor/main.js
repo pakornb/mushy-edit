@@ -5,7 +5,7 @@ import {
   getAnnos, setAnnos, hasAnnos, getBoardFit, setBoardFit, fitRect,
   isShotStart, forceCut, mergeUp, fmtClock,
 } from '../core/model.js';
-import { createAnnotator, annotatorToolbar } from '../core/annotate.js';
+import { createAnnotator, annotatorToolbar, drawAnnos } from '../core/annotate.js';
 import { loadFromFiles, loadFromZip, insertFrame, solidColorBlob, moveFrames } from '../core/frames.js';
 import { saveWorkFile, openWorkFile } from '../io/workfile.js';
 import { loadAudioFile, drawWaveform } from '../io/audio.js';
@@ -38,16 +38,26 @@ function toggleAnnotate() {
 function enterAnnotate() {
   exitAnnotate();
   const cvEl = $('previewCanvas'); if (!cvEl || !cvEl.width) return;
-  if (!imgCache.get(cur)) { drawPreview(cur).then(() => { if (annoMode) enterAnnotate(); }); return; }
+  if (!imgCache.get(P.frames[cur].name)) { drawPreview(cur).then(() => { if (annoMode) enterAnnotate(); }); return; }
   annoCtrl = createAnnotator($('previewStage'), cvEl, getAnnos(P, cur), (strokes) => {
     mutate(() => setAnnos(P, cur, strokes));
     const el = slotEls.get(cur); if (el) el.classList.toggle('has-anno', strokes.length > 0);
     refreshUndoButtons();
-  }, { getImageRect: (cw, ch) => { const im = imgCache.get(cur); if (!im) return { x: 0, y: 0, w: cw, h: ch }; const r = fitRect(getBoardFit(P, cur), im.naturalWidth, im.naturalHeight, cw, ch); return { x: r.dx, y: r.dy, w: r.dw, h: r.dh }; } });
+  }, { getImageRect: (cw, ch) => { const im = imgCache.get(P.frames[cur].name); if (!im) return { x: 0, y: 0, w: cw, h: ch }; const r = fitRect(getBoardFit(P, cur), im.naturalWidth, im.naturalHeight, cw, ch); return { x: r.dx, y: r.dy, w: r.dw, h: r.dh }; } });
   const bar = annotatorToolbar(annoCtrl); bar.id = 'annoBarInner';
   $('annoBar').innerHTML = ''; $('annoBar').appendChild(bar); $('annoBar').classList.remove('hidden');
 }
-function exitAnnotate() { if (annoCtrl) { annoCtrl.destroy(); annoCtrl = null; } $('annoBar').classList.add('hidden'); $('annoBar').innerHTML = ''; }
+function exitAnnotate() {
+  if (annoCtrl) { annoCtrl.destroy(); annoCtrl = null; }
+  $('annoBar').classList.add('hidden'); $('annoBar').innerHTML = '';
+  // The annotator only ever drew to its own overlay canvas, just destroyed
+  // above — the underlying preview canvas last drew this frame BEFORE
+  // whatever was just committed, so without a forced redraw here the strokes
+  // visually disappear until something else (e.g. scrubbing away and back)
+  // happens to trigger drawPreview() again.
+  previewFi = -1;
+  if (cur >= 0) drawPreview(cur);
+}
 function refreshAnno() { if (annoMode) enterAnnotate(); }
 
 function isolationBadge() {
@@ -136,8 +146,22 @@ function onLoaded() {
   transport.mountAudio(); syncAudioUI(); render(); layoutPreview();
 }
 
+// Keyed by frame NAME, not array index — insert/reorder change which frame
+// sits at a given index, and an index-keyed cache would happily hand back a
+// stale Image for the wrong board (this was the actual cause of the preview
+// canvas showing the old picture after a move or insert: the index looked
+// "cached" even though it now referred to a different frame entirely).
 const imgCache = new Map();
-function getImg(fi) { return new Promise((res) => { if (imgCache.has(fi)) return res(imgCache.get(fi)); const im = new Image(); im.onload = () => { imgCache.set(fi, im); res(im); }; im.onerror = () => res(null); im.src = P.frames[fi].url; }); }
+function getImg(fi) {
+  const name = P.frames[fi].name;
+  return new Promise((res) => {
+    if (imgCache.has(name)) return res(imgCache.get(name));
+    const im = new Image();
+    im.onload = () => { imgCache.set(name, im); res(im); };
+    im.onerror = () => res(null);
+    im.src = P.frames[fi].url;
+  });
+}
 let previewFi = -1;
 function layoutPreviewSize() {
   const cv = $('previewCanvas'); if (!cv) return; const box = $('previewWrap');
@@ -150,7 +174,18 @@ async function drawPreview(fi) {
   previewFi = fi; const cv = $('previewCanvas'); if (!cv) return; if (!cv.width) layoutPreviewSize();
   const im = await getImg(fi); if (previewFi !== fi) return;
   const ctx = cv.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
-  if (im) { const r = fitRect(getBoardFit(P, fi), im.naturalWidth, im.naturalHeight, cv.width, cv.height); ctx.drawImage(im, r.dx, r.dy, r.dw, r.dh); }
+  if (im) {
+    const r = fitRect(getBoardFit(P, fi), im.naturalWidth, im.naturalHeight, cv.width, cv.height);
+    ctx.drawImage(im, r.dx, r.dy, r.dw, r.dh);
+    // The interactive annotator only ever draws to its OWN overlay canvas,
+    // which gets destroyed the moment annotate mode is exited — nothing was
+    // ever baking the strokes into the actual preview, so they'd vanish the
+    // instant you left annotate mode, and never showed up during playback at
+    // all. mp4 export and the viewer already draw annotations for exactly
+    // this reason; the live editor preview was the one place that didn't.
+    const a = getAnnos(P, fi);
+    if (a.length) drawAnnos(ctx, a, { x: r.dx, y: r.dy, w: r.dw, h: r.dh });
+  }
 }
 function layoutPreview() { layoutPreviewSize(); if (previewFi >= 0) drawPreview(previewFi); refreshAnno(); }
 
@@ -190,7 +225,7 @@ function innerScaleTotal() { return Math.max(timeline(P).total, P.spotSeconds); 
 function buildTimeline() {
   if (pps == null) pps = fitPps();
   const inner = $('tlInner');
-  inner.querySelectorAll('.slot, .mk').forEach((n) => n.remove());
+  inner.querySelectorAll('.slot, .mk, .reorder-drop').forEach((n) => n.remove());
   slotEls.clear();
   const ph = $('playhead');
   const { boards, spans, markers } = timeline(P);
@@ -210,8 +245,16 @@ function buildTimeline() {
     if (!seen.has(bd.shotIndex)) { seen.add(bd.shotIndex); const nm = document.createElement('span'); nm.textContent = firstOf.get(bd.shotIndex); stripe.appendChild(nm); }
     stripe.addEventListener('pointerdown', (e) => e.stopPropagation()); // stripe never retimes
     slot.appendChild(stripe);
-    const c = document.createElement('canvas'); c.width = boardW; c.height = BOARD_H; c.className = 'bimg';
-    c.getContext('2d').drawImage(P.frames[bd.fi].thumb, 0, 0, boardW, BOARD_H);
+    // Tile the thumbnail across the tile's actual width instead of drawing it
+    // once at a fixed ~107px and leaving the rest of a long board's block
+    // black — capped so a board stretched out at extreme zoom doesn't ask for
+    // a pathologically huge canvas (the slot's own overflow:hidden clips
+    // anything past the cap, which just means very long/zoomed tiles stop
+    // tiling rather than erroring).
+    const slotW = Math.min(4000, Math.max(2, bd.len * pps));
+    const c = document.createElement('canvas'); c.width = slotW; c.height = BOARD_H; c.className = 'bimg';
+    const cctx = c.getContext('2d');
+    for (let x = 0; x < slotW; x += boardW) cctx.drawImage(P.frames[bd.fi].thumb, x, 0, boardW, BOARD_H);
     slot.appendChild(c);
     if (bd.pinned) { const pb = document.createElement('span'); pb.className = 'pinbadge'; pb.textContent = '📌'; slot.appendChild(pb); }
     if (hasAnnos(P, bd.fi)) slot.classList.add('has-anno');
@@ -272,7 +315,18 @@ function drawRuler() {
 }
 
 // ---------- selection ----------
-function selectSingle(fi) { selected = new Set([fi]); selAnchor = fi; cur = fi; transport.seek(boardStartSec(fi)); render(); }
+// `render()` alone never touches the preview canvas (it only rebuilds the
+// timeline DOM) — repainting it goes through transport.seek() -> onTick(),
+// which only calls drawPreview() when the resolved frame index DIFFERS from
+// `previewFi`. That dirty-check assumes an index always refers to the same
+// board, which insert/move break: e.g. selecting "index 2" right after
+// inserting a new board there, when index 2 was already the last thing drawn
+// (as some OTHER board, before the insert), looks like a no-op change and
+// the stale picture stays on screen. Resetting previewFi first guarantees
+// the next resolved frame always counts as "different."
+function selectSingle(fi) { selected = new Set([fi]); selAnchor = fi; cur = fi; previewFi = -1; transport.seek(boardStartSec(fi)); render(); }
+// Like selectSingle, but keeps a multi-board selection (used after a move).
+function selectSet(fis, primary) { selected = new Set(fis); selAnchor = primary; cur = primary; previewFi = -1; transport.seek(boardStartSec(primary)); render(); }
 function toggleSel(fi) { if (selected.has(fi)) selected.delete(fi); else selected.add(fi); selAnchor = fi; cur = fi; render(); }
 function selectExtend(dir) {
   const flat = enabledFlat(P); let i = flat.indexOf(cur); if (i < 0) i = 0;
@@ -294,11 +348,9 @@ function commitMove(idxs, insertBeforeIndex) {
   beginGesture();
   moveFrames(P, idxs, insertBeforeIndex).then((r) => {
     if (!r) { cancelGesture(); return; }
-    selected = new Set(r.newIndices);
-    cur = r.newIndices[r.newIndices.length - 1] ?? cur;
-    selAnchor = cur;
     computeShots(P);
-    commitGesture(); refreshUndoButtons(); render();
+    commitGesture(); refreshUndoButtons();
+    selectSet(r.newIndices, r.newIndices[r.newIndices.length - 1] ?? cur);
     toast(`Moved ${idxs.length > 1 ? idxs.length + ' boards' : 'board'}`);
   });
 }
@@ -349,18 +401,21 @@ function openInsertPopover(atIndex, clientX, clientY) {
   document.body.appendChild(pop);
   setTimeout(() => document.addEventListener('pointerdown', onInsertPopoverOutside, true), 0);
 }
-function remapForInsert(atIndex) {
-  if (cur >= atIndex) cur++;
-  if (selAnchor != null && selAnchor >= atIndex) selAnchor++;
-  selected = new Set([...selected].map((i) => (i >= atIndex ? i + 1 : i)));
-}
 async function performInsertFile(atIndex, file) {
   beginGesture();
   const r = await insertFrame(P, atIndex, file);
   if (!r) { cancelGesture(); toast('Could not read that image'); return; }
-  remapForInsert(atIndex);
+  // Default the new board's length to the average of its two new neighbors
+  // (falling back to whichever one exists at an edge) instead of the bare
+  // 1-frame default boardDur() falls back to — a 1-frame sliver was the
+  // "too short, have to zoom in to see it" problem.
+  const before = r.atIndex > 0 ? boardDur(P, r.atIndex - 1) : null;
+  const after = r.atIndex + 1 < P.frames.length ? boardDur(P, r.atIndex + 1) : null;
+  const dur = before != null && after != null ? (before + after) / 2 : (before ?? after ?? 1 / P.fps);
+  setBoardDur(P, r.atIndex, dur);
   computeShots(P);
-  commitGesture(); refreshUndoButtons(); render();
+  commitGesture(); refreshUndoButtons();
+  selectSingle(r.atIndex); // jump to + preview the newly inserted board
   toast('Board inserted');
 }
 async function performInsertBlank(atIndex, color) {
@@ -389,11 +444,25 @@ function attachTile(slot, imgCanvas, fi) {
     reorderDropEl.style.left = leftPx + 'px';
   }
   function clearReorderIndicator() { if (reorderDropEl) { reorderDropEl.remove(); reorderDropEl = null; } }
+  // Shared cleanup for both a normal release AND an interrupted gesture
+  // (pointercancel — e.g. a trackpad gesture the OS/browser reinterprets
+  // mid-drag) so the drop-line indicator can never survive past the drag
+  // that created it, whichever event ends it.
+  function endReorder(commit) {
+    slot.classList.remove('reordering');
+    clearReorderIndicator();
+    reordering = false;
+    if (commit && reorderMoved && reorderDropFi != null) {
+      const idxs = selected.has(fi) && selected.size > 1 ? [...selected] : [fi];
+      commitMove(idxs, reorderDropFi);
+    }
+    reorderDropFi = null;
+  }
 
   imgCanvas.addEventListener('pointerdown', (e) => {
     if (e.metaKey || e.ctrlKey) { e.stopPropagation(); toggleSel(fi); return; }
     if (e.altKey) {
-      e.stopPropagation(); reordering = true; reorderMoved = false; reorderDropFi = null;
+      e.preventDefault(); e.stopPropagation(); reordering = true; reorderMoved = false; reorderDropFi = null;
       imgCanvas.setPointerCapture(e.pointerId);
       if (!selected.has(fi)) selected = new Set([fi]);
       slot.classList.add('reordering');
@@ -425,19 +494,16 @@ function attachTile(slot, imgCanvas, fi) {
     }
     computeShots(P); light();
   });
+  imgCanvas.addEventListener('pointercancel', (e) => {
+    imgCanvas.releasePointerCapture?.(e.pointerId);
+    if (reordering) { endReorder(false); return; }
+    slot.classList.remove('dragging');
+    if (axis && moved) cancelGesture();
+    axis = null; snap = null;
+  });
   imgCanvas.addEventListener('pointerup', (e) => {
     imgCanvas.releasePointerCapture?.(e.pointerId);
-    if (reordering) {
-      slot.classList.remove('reordering');
-      clearReorderIndicator();
-      reordering = false;
-      if (reorderMoved && reorderDropFi != null) {
-        const idxs = selected.has(fi) && selected.size > 1 ? [...selected] : [fi];
-        commitMove(idxs, reorderDropFi);
-      }
-      reorderDropFi = null;
-      return;
-    }
+    if (reordering) { endReorder(true); return; }
     slot.classList.remove('dragging');
     if (axis && moved) { commitGesture(); refreshUndoButtons(); render(); }
     else { selectSingle(fi); }
@@ -504,13 +570,36 @@ function layoutAudioClip() {
   const off = P.audio.offsetSec || 0, dur = P.audio.duration || 0, w = Math.max(24, Math.round(dur * pps));
   clip.style.left = off * pps + 'px'; clip.style.width = w + 'px';
   const cv = clip.querySelector('canvas'); cv.width = w; cv.height = 36; cv.style.width = w + 'px'; cv.style.height = '36px';
-  drawWaveform(cv, P.audio, {});
+  // Both fades are anchored to the VIDEO timeline's own start/end, same as
+  // actual playback/export — not to the clip's own edges. Fade-out: for a
+  // long audio file laid under a short spot, the video's end can land well
+  // before the clip's own visual right edge. Fade-in: a negative offset
+  // (clip trimmed to start playing before the video) shifts the video's t=0
+  // — where the fade should actually start — into the clip rather than at
+  // its left edge.
+  const fps = P.fps || 24;
+  const fadeInStartPx = Math.max(0, -off) * pps;
+  const fadeInEndPx = fadeInStartPx + ((P.audio.fadeInFrames || 0) / fps) * pps;
+  const fadeOutEndPx = (timeline(P).total - off) * pps;
+  const fadeOutStartPx = fadeOutEndPx - ((P.audio.fadeOutFrames || 0) / fps) * pps;
+  drawWaveform(cv, P.audio, { fadeInStartPx, fadeInEndPx, fadeOutStartPx, fadeOutEndPx });
   clip.querySelector('.aud-label').textContent = P.audio.name;
 }
 function attachAudioClipDrag(clip) {
   let dragging = false, x0 = 0, off0 = 0;
   clip.addEventListener('pointerdown', (e) => { if (!P.audio) return; dragging = true; x0 = e.clientX; off0 = P.audio.offsetSec || 0; clip.classList.add('dragging'); clip.setPointerCapture(e.pointerId); beginGesture(); e.stopPropagation(); });
-  clip.addEventListener('pointermove', (e) => { if (!dragging) return; let off = off0 + (e.clientX - x0) / pps; off = Math.round(off * P.fps) / P.fps; P.audio.offsetSec = off; clip.style.left = off * pps + 'px'; drawSlipReadout(); });
+  clip.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    let off = off0 + (e.clientX - x0) / pps; off = Math.round(off * P.fps) / P.fps;
+    P.audio.offsetSec = off;
+    // Not just clip.style.left — the fade-out marker's pixel position is
+    // computed relative to the clip's own left edge (since it's anchored to
+    // the video's end, not the clip's), so it has to be redrawn on every
+    // offset change or it just rides along with the clip, stuck wherever it
+    // was drawn last instead of staying pinned to the video's actual end.
+    layoutAudioClip();
+    drawSlipReadout();
+  });
   clip.addEventListener('pointerup', (e) => { if (!dragging) return; dragging = false; clip.classList.remove('dragging'); clip.releasePointerCapture?.(e.pointerId); commitGesture(); refreshUndoButtons(); transport.seek(transport.sec); });
 }
 function drawSlipReadout() { const a = P.audio; if (!a) return; const fr = Math.round((a.offsetSec || 0) * P.fps); $('slipVal').textContent = `offset ${fr >= 0 ? '+' : ''}${fr}f (${fmtClock(Math.abs(a.offsetSec || 0))})`; }
@@ -684,14 +773,20 @@ function wire() {
   $('setSync').onclick = setSyncToPlayhead;
   $('removeAudio').onclick = removeAudio;
   $('useAudioLen').onclick = () => { if (P.audio?.duration) { mutate(() => { P.spotSeconds = Math.round(P.audio.duration * 100) / 100; }); $('spot').value = P.spotSeconds; render(); toast('Spot set to audio length'); } };
+  // Live-refresh the audio element's volume on every drag tick (not just on
+  // release) so adjusting gain/fade is actually audible immediately against
+  // the current playhead position — previously these only ever affected mp4
+  // export and the exported viewer, never the editor's own playback, which
+  // just looked like the controls did nothing at all.
+  const refreshLiveVolume = () => { if (P.audio && transport.audioEl.src) transport.audioEl.volume = transport._audioVolume(); };
   $('audioGain').addEventListener('focus', beginGesture);
-  $('audioGain').addEventListener('input', (e) => { if (!P.audio) return; P.audio.gain = +e.target.value; $('audioGainVal').textContent = Math.round(P.audio.gain * 100) + '%'; });
+  $('audioGain').addEventListener('input', (e) => { if (!P.audio) return; P.audio.gain = +e.target.value; $('audioGainVal').textContent = Math.round(P.audio.gain * 100) + '%'; refreshLiveVolume(); });
   $('audioGain').addEventListener('change', () => { commitGesture(); refreshUndoButtons(); });
   $('fadeInFrames').addEventListener('focus', beginGesture);
-  $('fadeInFrames').addEventListener('input', (e) => { if (!P.audio) return; P.audio.fadeInFrames = Math.max(0, Math.round(+e.target.value || 0)); });
+  $('fadeInFrames').addEventListener('input', (e) => { if (!P.audio) return; P.audio.fadeInFrames = Math.max(0, Math.round(+e.target.value || 0)); refreshLiveVolume(); layoutAudioClip(); });
   $('fadeInFrames').addEventListener('change', () => { commitGesture(); refreshUndoButtons(); });
   $('fadeOutFrames').addEventListener('focus', beginGesture);
-  $('fadeOutFrames').addEventListener('input', (e) => { if (!P.audio) return; P.audio.fadeOutFrames = Math.max(0, Math.round(+e.target.value || 0)); });
+  $('fadeOutFrames').addEventListener('input', (e) => { if (!P.audio) return; P.audio.fadeOutFrames = Math.max(0, Math.round(+e.target.value || 0)); refreshLiveVolume(); layoutAudioClip(); });
   $('fadeOutFrames').addEventListener('change', () => { commitGesture(); refreshUndoButtons(); });
 
   $('insertModeBtn').onclick = toggleInsertMode;

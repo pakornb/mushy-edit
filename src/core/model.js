@@ -261,6 +261,16 @@ function regionAround(p, flat, positions) {
   return { lo, hi, leftPin, rightPin };
 }
 
+// Smoothstep ease-in/ease-out: 0 at t=0, 1 at t=1, zero slope at both ends —
+// the same S-curve as falloffWeight's 'smooth' case below, reused here for
+// audio fade in/out so the gain ramp doesn't have the abrupt slope change a
+// plain linear ramp has right at the fade boundary (audible as a faint click
+// / "starts moving too fast" feel, especially on fade-in).
+export function easeInOut(t) {
+  t = Math.max(0, Math.min(1, t));
+  return t * t * (3 - 2 * t);
+}
+
 // normalized falloff weight for distance ratio t in [0,∞), by curve
 export function falloffWeight(t, curve = 'smooth') {
   if (t >= 1) return 0;
