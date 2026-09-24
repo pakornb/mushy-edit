@@ -13,7 +13,7 @@ import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture } from '../core/history.js';
 import { APPS_SCRIPT } from '../io/appsScript.js';
-import { openAssetWindow, openPreview, exportBreakdownJSON, setRefresh, closeModal } from './assets.js';
+import { openAssetWindow, openPreview, exportBreakdownJSON, exportBreakdownCompositeJSON, sendBreakdownDirect, configureSheetsWebApp, setRefresh, closeModal } from './assets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
 
@@ -495,6 +495,22 @@ function wire() {
   document.addEventListener('click', (e) => { if (!e.target.closest('#exportBtn, #exportMenu')) $('exportMenu').classList.add('hidden'); });
   $('mPreview').onclick = () => { $('exportMenu').classList.add('hidden'); openPreview(); };
   $('mJson').onclick = () => { $('exportMenu').classList.add('hidden'); exportBreakdownJSON(); toast('Breakdown JSON downloaded'); };
+  $('mJsonComposite').onclick = async () => {
+    $('exportMenu').classList.add('hidden');
+    try { overlay('Building composite strip…'); await exportBreakdownCompositeJSON(); toast('Composite breakdown JSON downloaded'); }
+    catch (e) { console.error(e); toast('Composite export failed'); } finally { overlay(false); }
+  };
+  $('mSendDirect').onclick = async () => {
+    $('exportMenu').classList.add('hidden');
+    try {
+      overlay('Sending to Google Sheet…');
+      const res = await sendBreakdownDirect();
+      const bits = [`${res.shots} shots`, `${res.placed} placed`];
+      if (res.assets != null) bits.push(`${res.assets} assets`);
+      toast(`Sent — ${bits.join(', ')}`);
+    } catch (e) { console.error(e); toast(e.message || 'Send failed'); } finally { overlay(false); }
+  };
+  $('mSheetsConfig').onclick = () => { $('exportMenu').classList.add('hidden'); if (configureSheetsWebApp()) toast('Sheets Web App URL saved'); };
   $('mCopyGs').onclick = () => { $('exportMenu').classList.add('hidden'); copyGs(); };
   $('annotateBtn').onclick = toggleAnnotate;
   $('mMp4').onclick = () => { $('exportMenu').classList.add('hidden'); runMp4(0); };

@@ -76,6 +76,122 @@ export async function exportBreakdownJSON() {
   a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// ---------- composite-strip export (experimental) ----------
+// Instead of one thumbnail per row (N insertImage() calls in Apps Script, the
+// slow part of building a sheet), stack every row's picture into a single tall
+// image per column and ship that + each row's slice height. Apps Script then
+// does ONE insertImage() per column instead of one per row. These constants
+// must match MONTAGE_W / PAD in src/io/appsScript.js (regenerate that file after
+// editing the shot/asset sheet builders — see CLAUDE.md).
+const STRIP_MONTAGE_W = 300;
+const STRIP_REF_W = 320;
+const STRIP_PAD = 8;
+
+// entries: [{url,w,h} | null] one per row, in final row order. Returns
+// {url, w, h, rowH} where rowH[i] is that row's slice height (sans PAD) —
+// Apps Script sets row heights straight from this, so there's one source of
+// truth for the row-height math instead of recomputing it on both sides.
+async function buildStrip(entries, colWidth) {
+  const rowH = entries.map((e) => (e && e.url) ? Math.max(1, Math.round(colWidth * e.h / e.w)) : Math.round(colWidth * 88 / 152));
+  const totalH = rowH.reduce((sum, h) => sum + h + STRIP_PAD, 0);
+  if (!entries.length || !totalH) return { url: null, w: colWidth, h: 0, rowH: [] };
+  const cv = document.createElement('canvas'); cv.width = colWidth; cv.height = totalH;
+  const ctx = cv.getContext('2d');
+  // JPEG has no alpha channel — unpainted canvas pixels (the PAD gaps between
+  // rows, and any row with no thumbnail) get flattened to solid BLACK on
+  // export otherwise. Fill white first to match the sheet's own background.
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
+  let y = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e && e.url) { const img = await loadImg(e.url); if (img) ctx.drawImage(img, 0, y, colWidth, rowH[i]); }
+    y += rowH[i] + STRIP_PAD;
+  }
+  return { url: cv.toDataURL('image/jpeg', 0.78), w: colWidth, h: totalH, rowH };
+}
+
+export async function buildBreakdownDataComposite() {
+  const shotEntries = [];
+  const shots = P.shots.map((sh, si) => {
+    const m = shotMeta(P, sh);
+    shotEntries.push(shotMontage(sh));
+    return {
+      id: si + 1, name: sh.name || '', tag: m.tag || '',
+      length: lenToUnit(P, shotLenSec(P, sh)), note: m.note || '',
+      taskVals: m.taskVals || m.stageVals || {}, disabled: isShotDisabled(P, sh),
+    };
+  });
+  const shotStrip = await buildStrip(shotEntries, STRIP_MONTAGE_W);
+
+  const assetEntries = [];
+  const assets = [];
+  for (const cat of P.assetCats) {
+    const items = assetsByCat(P, cat);
+    for (let i = 0; i < items.length; i++) {
+      const a = items[i];
+      assetEntries.push(a.thumb ? await assetExportThumb(a, STRIP_REF_W) : null);
+      assets.push({ name: a.name, cat: a.cat, catLabel: i === 0 ? cap(cat) : '', tasks: a.tasks || {} });
+    }
+  }
+  const assetStrip = await buildStrip(assetEntries, STRIP_REF_W);
+
+  return {
+    kind: 'breakdown', imageMode: 'composite',
+    lenUnit: P.lenUnit, fps: P.fps, shotTasks: P.shotTasks, assetTasks: P.assetTasks, assetCats: P.assetCats,
+    shots, assets, shotStrip, assetStrip,
+  };
+}
+
+export async function exportBreakdownCompositeJSON() {
+  const data = await buildBreakdownDataComposite();
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `${P.baseName}_breakdown_composite.json`;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- direct-to-Sheets export (experimental, no file step) ----------
+// POSTs the composite breakdown straight to an Apps Script Web App deployment
+// bound to the target Sheet (see doPost() in appsScript.js) — no download,
+// no file picker. URL + token live only in this browser's localStorage, never
+// in the repo; the token is a placeholder gate, not real auth (see the note
+// above doPost() in appsScript.js for the intended swap once the app itself
+// sits behind Google-account-restricted hosting).
+function getSheetsWebAppConfig() {
+  let url = '', token = '';
+  try { url = localStorage.getItem('mushySheetsWebAppUrl') || ''; token = localStorage.getItem('mushySheetsToken') || ''; } catch (e) {}
+  return { url, token };
+}
+function setSheetsWebAppConfig(url, token) {
+  try { localStorage.setItem('mushySheetsWebAppUrl', url); localStorage.setItem('mushySheetsToken', token); } catch (e) {}
+}
+export function configureSheetsWebApp() {
+  const cur = getSheetsWebAppConfig();
+  const url = (prompt('Apps Script Web App URL for this Sheet (Deploy → New deployment → Web app):', cur.url) || '').trim();
+  if (!url) return false;
+  const token = (prompt('Shared token (must match this deployment’s MUSHY_TOKEN script property; blank = no check):', cur.token) || '').trim();
+  setSheetsWebAppConfig(url, token);
+  return true;
+}
+
+export async function sendBreakdownDirect() {
+  let cfg = getSheetsWebAppConfig();
+  if (!cfg.url) { if (!configureSheetsWebApp()) throw new Error('No Web App URL set.'); cfg = getSheetsWebAppConfig(); }
+  const data = await buildBreakdownDataComposite();
+  const resp = await fetch(cfg.url, {
+    method: 'POST',
+    // text/plain keeps this a CORS "simple request" — application/json would
+    // trigger a preflight OPTIONS request Apps Script Web Apps don't answer.
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ token: cfg.token, data }),
+  });
+  let json = null;
+  try { json = await resp.json(); } catch (e) {}
+  if (!json) throw new Error('No response from the Web App — check the URL and that it’s deployed with "Anyone" access.');
+  if (json.error) throw new Error(json.error);
+  return json;
+}
+
 // ---------- modal shell ----------
 export function modal(title, bodyBuilder, wide, onClose) {
   closeModal(false);

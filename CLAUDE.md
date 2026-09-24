@@ -106,6 +106,35 @@ just `npm install && npm run build` in place. Always run a build before committi
   `.gs` for the in-app "Copy Apps Script" button — **regenerate it whenever the `.gs` changes**:
   `node -e 'const fs=require("fs");fs.writeFileSync("src/io/appsScript.js","export const APPS_SCRIPT = "+JSON.stringify(fs.readFileSync("../sequence_breakdown_to_sheets.gs","utf8"))+";\n")'`
   (adjust the `.gs` path to wherever it lives in the repo).
+- **Composite-strip export (experimental, "Download breakdown JSON (fast, experimental)")**: the
+  normal export embeds one thumbnail per shot/asset, and the `.gs` does one `insertImage()` per
+  row — the dominant cost of building a sheet, since each is its own network round trip and there's
+  no batch image-insert call in the Sheets API. The composite path (`buildBreakdownDataComposite`
+  in `assets.js`, `imageMode:"composite"` in the JSON) instead stacks every row's picture into one
+  tall canvas per column client-side (mirrors `shotMontage`'s per-shot compositing, just one level
+  up) and ships that plus a `rowH[]` per-row height array. The `.gs`'s `buildShotListComposite` /
+  `buildAssetSheetComposite` then do exactly **one** `insertImage()` per column, using `rowH`
+  directly for `setRowHeight` so there's a single source of truth for the aspect math. Scoped to
+  **"Build new sheet" only** — `updateFromJsonText` throws for composite JSON, since patching one
+  changed row would mean re-inserting the whole strip; the per-row path stays the default and is
+  what "Update active sheet" always uses. `STRIP_MONTAGE_W`/`STRIP_REF_W`/`STRIP_PAD` in `assets.js`
+  must match `MONTAGE_W`/`PAD` in the `.gs` (kept as plain numeric literals in both, not shared —
+  check both when changing thumbnail sizing).
+- **Direct-to-Sheets export (experimental, "Send to Google Sheet (direct, experimental)")**: skips
+  the download-then-pick-a-file step entirely by POSTing the composite breakdown straight to an
+  Apps Script **Web App** deployment (`doPost()` in the `.gs`/`appsScript.js`) instead of the file
+  dialog. Since the script stays bound to one Sheet, `doPost` always writes there — same as running
+  it from the menu, no spreadsheet-ID plumbing needed. `doPost` is a thin wrapper around
+  `buildFromJsonText`, so it gets composite/per-row + shot-list/contact-sheet dispatch for free.
+  Client side: `sendBreakdownDirect()`/`configureSheetsWebApp()` in `assets.js`, URL + token saved
+  in `localStorage` only (`mushySheetsWebAppUrl`/`mushySheetsToken` — never hardcode these). The
+  fetch uses `Content-Type: text/plain` on purpose — `application/json` triggers a CORS preflight
+  `OPTIONS` request Apps Script Web Apps don't answer, which silently breaks the POST.
+  **Security is a placeholder**: deploying "Anyone" + a shared `MUSHY_TOKEN` script property is the
+  minimum needed for an unauthenticated browser `fetch()` to reach `doPost` at all — the token is
+  visible in that browser's `localStorage`/devtools, so treat it as a light deterrent, not real
+  auth. The intended fix is Google-account-restricted access once the app itself is hosted behind
+  Google login — don't build real OAuth into the app for this until that's actually in place.
 
 ## Roadmap / next tasks
 1. **Batch B — insert board + update-images-preserve-timing:**
