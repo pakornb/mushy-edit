@@ -39,7 +39,7 @@ export async function saveWorkFile(onProgress) {
     shotDisabled: [...P.shotDisabled],
     pinned: [...P.pinned], annos: [...P.annos.entries()],
     fitMode: P.fitMode, boardFit: [...P.boardFit.entries()],
-    sheetsDeploymentId: P.sheetsDeploymentId || '',
+    sheetsSpreadsheetId: P.sheetsSpreadsheetId || '', sheetsBreakdownTabName: P.sheetsBreakdownTabName || '',
     audio,
     frames,
   };
@@ -82,7 +82,7 @@ export async function openWorkFile(file, onProgress) {
   P.pinned = new Set(doc.pinned || []);
   P.annos = new Map(doc.annos || []);
   P.fitMode = doc.fitMode || 'cover'; P.boardFit = new Map(doc.boardFit || []);
-  P.sheetsDeploymentId = doc.sheetsDeploymentId || '';
+  P.sheetsSpreadsheetId = doc.sheetsSpreadsheetId || ''; P.sheetsBreakdownTabName = doc.sheetsBreakdownTabName || '';
   P.source = 'workfile';
 
   P.audio = null;

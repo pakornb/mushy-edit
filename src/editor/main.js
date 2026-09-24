@@ -13,7 +13,7 @@ import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture } from '../core/history.js';
 import { APPS_SCRIPT } from '../io/appsScript.js';
-import { openAssetWindow, openPreview, exportBreakdownJSON, exportBreakdownCompositeJSON, sendBuildDirect, sendUpdateDirect, promptSheetsDeploymentId, setRefresh, closeModal } from './assets.js';
+import { openAssetWindow, openPreview, exportBreakdownJSON, exportBreakdownCompositeJSON, sendBuildDirect, sendUpdateDirect, promptSheetsSpreadsheet, setRefresh, closeModal } from './assets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
 
@@ -518,7 +518,7 @@ function wire() {
       toast(`Updated — ${res.updated} refreshed, ${res.added} added, ${res.removed} flagged`);
     } catch (e) { console.error(e); toast(e.message || 'Update failed'); } finally { overlay(false); }
   };
-  $('mSheetsConfig').onclick = () => { $('exportMenu').classList.add('hidden'); if (promptSheetsDeploymentId()) toast('Sheet deployment ID saved to this project'); };
+  $('mSheetsConfig').onclick = () => { $('exportMenu').classList.add('hidden'); if (promptSheetsSpreadsheet()) toast('Sheet saved to this project'); };
   $('mCopyGs').onclick = () => { $('exportMenu').classList.add('hidden'); copyGs(); };
   $('annotateBtn').onclick = toggleAnnotate;
   $('mMp4').onclick = () => { $('exportMenu').classList.add('hidden'); runMp4(0); };

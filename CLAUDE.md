@@ -126,28 +126,39 @@ just `npm install && npm run build` in place. Always run a build before committi
   download-then-pick-a-file step by calling the Apps Script **Execution API** (`scripts.run`, see
   `src/io/sheetsApi.js`) instead — each artist signs in with their own Google account (needs edit
   access to the target Sheet) rather than every user having to copy-paste and deploy the script
-  themselves. `apiBuild` / `apiSyncSheetState` / `apiUpdateComposite` in the `.gs`/`appsScript.js`
-  are thin wrappers the Execution API calls by name; `apiBuild` reuses `buildFromJsonText` directly
-  so it gets every existing dispatch (composite/per-row, shot-list/contact-sheet) for free. One-time
-  setup (done once per Sheet by whoever administers it, not by every artist) is documented in the
-  header comment of the `.gs` — GCP project + OAuth client + "API Executable" deployment.
-  **Zero configuration by default**: the OAuth Client ID (`CLIENT_ID` in `sheetsApi.js`) is
-  hardcoded — it's the shared `hornet-tools` client, isn't a secret, and is the same for every
-  Hornet tool/show. The deployment ID defaults to `DEFAULT_DEPLOYMENT_ID` (also hardcoded), which
-  points at one shared "Mushy Edit Breakdowns" Sheet — every project's Build/Update (direct) just
-  works out of the box, landing that project's breakdown as its own timestamped tab in that one
-  Sheet. **`project.sheetsDeploymentId`** is an *optional* per-project override (added to
-  `captureState`/`applyState` and `workfile.js` save+open like any other persistent field, resolved
-  in `resolveDeploymentId()` in `assets.js`) for a project that specifically wants its own separate
-  Sheet — set via Export → "Use a separate Google Sheet for this project…"
-  (`promptSheetsDeploymentId`), saved in the work file so it travels with that project. Never move
-  either ID into this browser's `localStorage` — that reintroduces "reconfigure per browser."
+  themselves.
+  **ONE shared deployment serves every Sheet, not one deployment per Sheet.** `apiBuild` /
+  `apiSyncSheetState` / `apiUpdateComposite` in the `.gs`/`appsScript.js` take a `spreadsheetId` and
+  call `SpreadsheetApp.openById(spreadsheetId)` explicitly, instead of relying on "the active
+  spreadsheet" the way the menu-driven dialogs do (a headless API call has no browser tab to be
+  "active" in). `apiBuild` reuses `buildFromJsonText(text, ss)` directly — the same build functions
+  serve both the menu path (`ss` omitted → falls back to `getActiveSpreadsheet()`) and the API path
+  (`ss` passed explicitly), so there's one code path, not two. This means connecting a *new* show's
+  Sheet is just giving Mushy Edit that Sheet's URL — no Apps Script editor, no GCP console, for any
+  future Sheet, ever. That's only possible because there's no per-Sheet script project or deployment
+  to create: **there is no public API to link an Apps Script project to a specific GCP project**
+  (confirmed — Console-UI-only), which is exactly why this design avoids creating a new script
+  project per Sheet at all, rather than trying to automate that unavoidable step away.
+  `CLIENT_ID` and `DEFAULT_DEPLOYMENT_ID` (both in `sheetsApi.js`) are hardcoded — the shared
+  `hornet-tools` OAuth client and the one shared deployment id, set up exactly once, ever, by
+  whoever administers this (see the header comment of the `.gs` for that one-time setup).
+  `DEFAULT_SPREADSHEET_ID` (also `sheetsApi.js`) is the one shared "Mushy Edit Breakdowns" Sheet
+  every project defaults to with **zero configuration**. `project.sheetsSpreadsheetId` is an
+  *optional* per-project override (a plain Sheet URL, added to `captureState`/`applyState` and
+  `workfile.js` save+open, resolved in `resolveSpreadsheetId()` in `assets.js`) for a project that
+  wants its own separate Sheet — set via Export → "Use a separate Google Sheet for this project…"
+  (`promptSheetsSpreadsheet`) — nothing to set up on that Sheet beyond normal Google sharing
+  permissions, since the one shared deployment can open any Sheet the signed-in user can edit.
+  `project.sheetsBreakdownTabName` remembers exactly which tab `apiBuild` created (its result
+  includes `sheetName`), since "Update active sheet (direct)" needs to target one specific tab and
+  a headless call has no "active tab" to fall back on the way the menu-driven update does. Never
+  move any of this into this browser's `localStorage` — that reintroduces "reconfigure per browser."
   - **"Update active sheet (direct)"** (`sendUpdateDirect` in `assets.js`) reimplements
     `updateActiveSheet`'s own by-name matching **client-side**: it calls `apiSyncSheetState()` for
-    the sheet's current Name-column row order, reconciles it against the live project (existing rows
-    keep their relative order and get a fresh thumbnail + length if still present, or get flagged
-    `removed` if not; anything new in the project is appended), builds ONE composite covering that
-    exact final row order, then calls `apiUpdateComposite`. This has to happen client-side — the
+    the target tab's current Name-column row order, reconciles it against the live project (existing
+    rows keep their relative order and get a fresh thumbnail + length if still present, or get
+    flagged `removed` if not; anything new in the project is appended), builds ONE composite covering
+    that exact final row order, then calls `apiUpdateComposite`. This has to happen client-side — the
     composite has to be built in the sheet's real final row order, which only the client can
     determine before sending anything.
   - **Known gap vs. the original per-row update**: a shot that's vanished from the live project used

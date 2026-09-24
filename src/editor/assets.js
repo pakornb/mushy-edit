@@ -5,7 +5,7 @@ import {
 } from '../core/model.js';
 import { mutate } from '../core/history.js';
 import { createAnnotator, annotatorToolbar, drawAnnos } from '../core/annotate.js';
-import { apiBuild, apiSyncSheetState, apiUpdateComposite, DEFAULT_DEPLOYMENT_ID } from '../io/sheetsApi.js';
+import { apiBuild, apiSyncSheetState, apiUpdateComposite, DEFAULT_SPREADSHEET_ID } from '../io/sheetsApi.js';
 
 let refresh = () => {};
 export function setRefresh(fn) { refresh = fn; }
@@ -154,26 +154,36 @@ export async function exportBreakdownCompositeJSON() {
 // ---------- direct-to-Sheets export (experimental, no file step) ----------
 // Signed-in-user version of the composite export: calls the Apps Script
 // Execution API (sheetsApi.js) instead of downloading + picking a JSON file.
-// No configuration needed by default — projects use the one shared Sheet
-// (DEFAULT_DEPLOYMENT_ID). project.sheetsDeploymentId is an OPTIONAL
-// per-project override (saved in the work file, so it travels with the
-// project) for anyone who wants a show to land in its own separate Sheet.
-export function setSheetsDeploymentId(id) { mutate(() => { P.sheetsDeploymentId = (id || '').trim(); }); }
-export function promptSheetsDeploymentId() {
-  const id = (prompt('Apps Script API-executable deployment ID for a Sheet dedicated to this project (leave using the shared Sheet unless you specifically want one of your own):', P.sheetsDeploymentId || '') || '').trim();
-  if (!id) return false;
-  setSheetsDeploymentId(id);
+// No configuration needed by default — projects land in the one shared
+// "Mushy Edit Breakdowns" Sheet (DEFAULT_SPREADSHEET_ID). project.sheetsSpreadsheetId
+// is an OPTIONAL per-project override (a plain Sheet URL, saved in the work
+// file so it travels with the project) for anyone who wants a show to land
+// in its own separate Sheet — nothing to set up on that Sheet beyond normal
+// Google sharing permissions, since one shared deployment serves any Sheet.
+export function setSheetsSpreadsheet(urlOrId) {
+  const s = (urlOrId || '').trim();
+  const m = s.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  const id = m ? m[1] : s;
+  mutate(() => { P.sheetsSpreadsheetId = id; P.sheetsBreakdownTabName = ''; });
+}
+export function promptSheetsSpreadsheet() {
+  const cur = P.sheetsSpreadsheetId ? `https://docs.google.com/spreadsheets/d/${P.sheetsSpreadsheetId}/edit` : '';
+  const url = (prompt('Google Sheet URL to use for this project (leave blank to use the shared default Sheet):', cur) || '').trim();
+  if (!url) { if (!cur) return false; mutate(() => { P.sheetsSpreadsheetId = ''; P.sheetsBreakdownTabName = ''; }); return true; }
+  setSheetsSpreadsheet(url);
   return true;
 }
 
-function resolveDeploymentId() {
-  return P.sheetsDeploymentId || DEFAULT_DEPLOYMENT_ID;
+function resolveSpreadsheetId() {
+  return P.sheetsSpreadsheetId || DEFAULT_SPREADSHEET_ID;
 }
 
 export async function sendBuildDirect() {
-  const deploymentId = resolveDeploymentId();
+  const spreadsheetId = resolveSpreadsheetId();
   const data = await buildBreakdownDataComposite();
-  return apiBuild(data, deploymentId);
+  const res = await apiBuild(spreadsheetId, data);
+  if (res && res.sheetName) mutate(() => { P.sheetsBreakdownTabName = res.sheetName; });
+  return res;
 }
 
 /**
@@ -188,8 +198,9 @@ export async function sendBuildDirect() {
  * as new, in project order — same shape updateActiveSheet() produces.
  */
 export async function sendUpdateDirect() {
-  const deploymentId = resolveDeploymentId();
-  const sync = await apiSyncSheetState(deploymentId);
+  const spreadsheetId = resolveSpreadsheetId();
+  if (!P.sheetsBreakdownTabName) throw new Error('No breakdown tab known for this project yet — use "Build new sheet (direct)" first.');
+  const sync = await apiSyncSheetState(spreadsheetId, P.sheetsBreakdownTabName);
   const existingNames = (sync && sync.names) || [];
   if (!existingNames.length) throw new Error('No existing breakdown rows found — use "Build new sheet (direct)" first.');
 
@@ -224,7 +235,7 @@ export async function sendUpdateDirect() {
   });
 
   const strip = await buildStrip(entries, STRIP_MONTAGE_W);
-  return apiUpdateComposite({ finalRows, strip }, deploymentId);
+  return apiUpdateComposite(spreadsheetId, P.sheetsBreakdownTabName, { finalRows, strip });
 }
 
 // ---------- modal shell ----------

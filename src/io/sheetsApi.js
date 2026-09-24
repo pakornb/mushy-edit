@@ -6,21 +6,20 @@
 // for the one-time GCP/OAuth-client/deployment steps this needs — none of
 // that can happen from code, it's done once per studio in Google's consoles.
 //
-// CLIENT_ID is the shared "hornet-tools" OAuth client — the same one works
-// for any Hornet tool calling any deployed Apps Script project, isn't a
-// secret (client IDs are public by design), and never changes per show, so
-// it's hardcoded here rather than something every artist re-enters.
+// ONE shared deployment serves EVERY Sheet, not one deployment per Sheet:
+// the Apps Script functions take a spreadsheetId and open that Spreadsheet
+// explicitly (SpreadsheetApp.openById) instead of relying on "the active
+// spreadsheet." So connecting a new show's Sheet is just giving Mushy Edit
+// that Sheet's URL — no Apps Script editor, no GCP console, ever, for any
+// future Sheet. (The one thing that CAN'T be automated is linking a script
+// project to a specific GCP project — there's no public API for it — which
+// is exactly why this avoids creating a new script project per Sheet at
+// all, rather than trying to automate that step away.)
 //
-// deploymentId identifies which Sheet's deployed script to call. Most
-// projects never need to think about this: DEFAULT_DEPLOYMENT_ID points at
-// the one shared "Mushy Edit Breakdowns" Sheet, so Build/Update (direct)
-// work with zero configuration out of the box, landing every show's
-// breakdown as its own timestamped tab in that one Sheet. A project can
-// still opt into its OWN separate Sheet via project.sheetsDeploymentId (set
-// once via "Use a separate Google Sheet for this project…", saved in the
-// work file) — that override, when present, always wins over the default.
-// Never move deployment ID into this browser's localStorage; that would
-// reintroduce "re-enter it per browser/profile."
+// CLIENT_ID is the shared "hornet-tools" OAuth client — isn't a secret
+// (client IDs are public by design) and is the same for every Hornet tool,
+// so it's hardcoded. DEFAULT_DEPLOYMENT_ID is that one shared deployment's
+// ID — also hardcoded, since there's only ever one.
 //
 // UNVERIFIED AGAINST A REAL DEPLOYMENT: the request/response shape here
 // follows Google's documented scripts.run contract, but the exact error
@@ -29,7 +28,9 @@
 // unexpected.
 
 const CLIENT_ID = '902841680403-3ua13oavs9ic6m4i1e6si7hl2b0q3qup.apps.googleusercontent.com';
-export const DEFAULT_DEPLOYMENT_ID = 'AKfycbxhjhPrngLQwuYR3FW91iBes-67IEb6pbRxRA9XTtjg5lCOX98LvN8ElRhjKbWUhTzcXw';
+const DEFAULT_DEPLOYMENT_ID = 'AKfycbxhjhPrngLQwuYR3FW91iBes-67IEb6pbRxRA9XTtjg5lCOX98LvN8ElRhjKbWUhTzcXw';
+// The one shared "Mushy Edit Breakdowns" Sheet every project defaults to.
+export const DEFAULT_SPREADSHEET_ID = '1trX0caIez7UVX9LOXmDsF-PH1CieUj8ljtU4pAvohgs';
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/script.scriptapp';
 
 let gisReady = null;
@@ -71,10 +72,9 @@ async function getAccessToken() {
   });
 }
 
-async function callScript(fn, params, deploymentId) {
-  if (!deploymentId) throw new Error('This project has no Google Sheet deployment ID set — Export → "Set Google Sheet deployment ID…" first.');
+async function callScript(fn, params) {
   const token = await getAccessToken();
-  const resp = await fetch(`https://script.googleapis.com/v1/scripts/${deploymentId}:run`, {
+  const resp = await fetch(`https://script.googleapis.com/v1/scripts/${DEFAULT_DEPLOYMENT_ID}:run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ function: fn, parameters: params }),
@@ -89,6 +89,10 @@ async function callScript(fn, params, deploymentId) {
   return json.response ? json.response.result : undefined;
 }
 
-export function apiBuild(data, deploymentId) { return callScript('apiBuild', [data], deploymentId); }
-export function apiSyncSheetState(deploymentId) { return callScript('apiSyncSheetState', [], deploymentId); }
-export function apiUpdateComposite(payload, deploymentId) { return callScript('apiUpdateComposite', [payload], deploymentId); }
+// data.sheetName in the result is the tab that got built — callers should
+// save it (project.sheetsBreakdownTabName) and pass it back to the two
+// functions below for any later update, since a headless call has no
+// "active tab" to fall back on.
+export function apiBuild(spreadsheetId, data) { return callScript('apiBuild', [spreadsheetId, data]); }
+export function apiSyncSheetState(spreadsheetId, sheetName) { return callScript('apiSyncSheetState', [spreadsheetId, sheetName]); }
+export function apiUpdateComposite(spreadsheetId, sheetName, payload) { return callScript('apiUpdateComposite', [spreadsheetId, sheetName, payload]); }
