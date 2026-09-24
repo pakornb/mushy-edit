@@ -51,6 +51,8 @@ just `npm install && npm run build` in place. Always run a build before committi
 - `src/viewer/main.js` + `view.html` — the read-only review player (loads a viewer JSON;
   `?src=<url>` also works).
 - `src/io/appsScript.js` — **generated** string of the Google Apps Script; see note.
+- `src/io/sheetsApi.js` — Google sign-in (GIS) + Apps Script Execution API (`scripts.run`) client for
+  the direct-to-Sheets export path; see the "Direct-to-Sheets export" note below.
 
 ## The timing model (read before touching retiming)
 - **Source of truth = per-board duration in seconds, keyed by filename** (`project.boardDur`
@@ -120,21 +122,34 @@ just `npm install && npm run build` in place. Always run a build before committi
   what "Update active sheet" always uses. `STRIP_MONTAGE_W`/`STRIP_REF_W`/`STRIP_PAD` in `assets.js`
   must match `MONTAGE_W`/`PAD` in the `.gs` (kept as plain numeric literals in both, not shared —
   check both when changing thumbnail sizing).
-- **Direct-to-Sheets export (experimental, "Send to Google Sheet (direct, experimental)")**: skips
-  the download-then-pick-a-file step entirely by POSTing the composite breakdown straight to an
-  Apps Script **Web App** deployment (`doPost()` in the `.gs`/`appsScript.js`) instead of the file
-  dialog. Since the script stays bound to one Sheet, `doPost` always writes there — same as running
-  it from the menu, no spreadsheet-ID plumbing needed. `doPost` is a thin wrapper around
-  `buildFromJsonText`, so it gets composite/per-row + shot-list/contact-sheet dispatch for free.
-  Client side: `sendBreakdownDirect()`/`configureSheetsWebApp()` in `assets.js`, URL + token saved
-  in `localStorage` only (`mushySheetsWebAppUrl`/`mushySheetsToken` — never hardcode these). The
-  fetch uses `Content-Type: text/plain` on purpose — `application/json` triggers a CORS preflight
-  `OPTIONS` request Apps Script Web Apps don't answer, which silently breaks the POST.
-  **Security is a placeholder**: deploying "Anyone" + a shared `MUSHY_TOKEN` script property is the
-  minimum needed for an unauthenticated browser `fetch()` to reach `doPost` at all — the token is
-  visible in that browser's `localStorage`/devtools, so treat it as a light deterrent, not real
-  auth. The intended fix is Google-account-restricted access once the app itself is hosted behind
-  Google login — don't build real OAuth into the app for this until that's actually in place.
+- **Direct-to-Sheets export (experimental, "Build/Update … (direct, experimental)")**: skips the
+  download-then-pick-a-file step by calling the Apps Script **Execution API** (`scripts.run`, see
+  `src/io/sheetsApi.js`) instead — each artist signs in with their own Google account (needs edit
+  access to the target Sheet) rather than every user having to copy-paste and deploy the script
+  themselves. `apiBuild` / `apiSyncSheetState` / `apiUpdateComposite` in the `.gs`/`appsScript.js`
+  are thin wrappers the Execution API calls by name; `apiBuild` reuses `buildFromJsonText` directly
+  so it gets every existing dispatch (composite/per-row, shot-list/contact-sheet) for free. One-time
+  setup (done once per Sheet by whoever administers it, not by every artist) is documented in the
+  header comment of the `.gs` — GCP project + OAuth client + "API Executable" deployment; the OAuth
+  Client ID + deployment ID are entered once per browser via "Configure Google Sheets…" and saved to
+  `localStorage` (`mushyGoogleClientId`/`mushyScriptDeploymentId` — never hardcode these).
+  - **"Update active sheet (direct)"** (`sendUpdateDirect` in `assets.js`) reimplements
+    `updateActiveSheet`'s own by-name matching **client-side**: it calls `apiSyncSheetState()` for
+    the sheet's current Name-column row order, reconciles it against the live project (existing rows
+    keep their relative order and get a fresh thumbnail + length if still present, or get flagged
+    `removed` if not; anything new in the project is appended), builds ONE composite covering that
+    exact final row order, then calls `apiUpdateComposite`. This has to happen client-side — the
+    composite has to be built in the sheet's real final row order, which only the client can
+    determine before sending anything.
+  - **Known gap vs. the original per-row update**: a shot that's vanished from the live project used
+    to keep showing its last-known picture (flagged red, but still visible) — that's not possible
+    anymore once a sheet's images are merged into one strip, since Apps Script has no way to crop a
+    sub-region out of an already-inserted image. A removed row's picture goes blank instead. Notes,
+    stage values, and everything else about the flag-removed/preserve-notes/append-new behavior
+    carries over exactly.
+  - **Unverified against a real deployment**: the `scripts.run` request/response shape follows
+    Google's documented contract, but exact OAuth scopes needed and the error shape when the called
+    script throws haven't been tested live — see the comment at the top of `sheetsApi.js`.
 
 ## Roadmap / next tasks
 1. **Batch B — insert board + update-images-preserve-timing:**

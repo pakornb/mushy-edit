@@ -13,7 +13,8 @@ import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture } from '../core/history.js';
 import { APPS_SCRIPT } from '../io/appsScript.js';
-import { openAssetWindow, openPreview, exportBreakdownJSON, exportBreakdownCompositeJSON, sendBreakdownDirect, configureSheetsWebApp, setRefresh, closeModal } from './assets.js';
+import { openAssetWindow, openPreview, exportBreakdownJSON, exportBreakdownCompositeJSON, sendBuildDirect, sendUpdateDirect, setRefresh, closeModal } from './assets.js';
+import { configureGoogleSheets } from '../io/sheetsApi.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
 
@@ -500,17 +501,25 @@ function wire() {
     try { overlay('Building composite strip…'); await exportBreakdownCompositeJSON(); toast('Composite breakdown JSON downloaded'); }
     catch (e) { console.error(e); toast('Composite export failed'); } finally { overlay(false); }
   };
-  $('mSendDirect').onclick = async () => {
+  $('mBuildDirect').onclick = async () => {
     $('exportMenu').classList.add('hidden');
     try {
-      overlay('Sending to Google Sheet…');
-      const res = await sendBreakdownDirect();
+      overlay('Signing in / building sheet…');
+      const res = await sendBuildDirect();
       const bits = [`${res.shots} shots`, `${res.placed} placed`];
       if (res.assets != null) bits.push(`${res.assets} assets`);
-      toast(`Sent — ${bits.join(', ')}`);
-    } catch (e) { console.error(e); toast(e.message || 'Send failed'); } finally { overlay(false); }
+      toast(`Built — ${bits.join(', ')}`);
+    } catch (e) { console.error(e); toast(e.message || 'Build failed'); } finally { overlay(false); }
   };
-  $('mSheetsConfig').onclick = () => { $('exportMenu').classList.add('hidden'); if (configureSheetsWebApp()) toast('Sheets Web App URL saved'); };
+  $('mUpdateDirect').onclick = async () => {
+    $('exportMenu').classList.add('hidden');
+    try {
+      overlay('Signing in / updating sheet…');
+      const res = await sendUpdateDirect();
+      toast(`Updated — ${res.updated} refreshed, ${res.added} added, ${res.removed} flagged`);
+    } catch (e) { console.error(e); toast(e.message || 'Update failed'); } finally { overlay(false); }
+  };
+  $('mSheetsConfig').onclick = () => { $('exportMenu').classList.add('hidden'); if (configureGoogleSheets()) toast('Google Sheets config saved'); };
   $('mCopyGs').onclick = () => { $('exportMenu').classList.add('hidden'); copyGs(); };
   $('annotateBtn').onclick = toggleAnnotate;
   $('mMp4').onclick = () => { $('exportMenu').classList.add('hidden'); runMp4(0); };

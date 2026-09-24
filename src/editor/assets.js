@@ -5,6 +5,7 @@ import {
 } from '../core/model.js';
 import { mutate } from '../core/history.js';
 import { createAnnotator, annotatorToolbar, drawAnnos } from '../core/annotate.js';
+import { apiBuild, apiSyncSheetState, apiUpdateComposite } from '../io/sheetsApi.js';
 
 let refresh = () => {};
 export function setRefresh(fn) { refresh = fn; }
@@ -151,45 +152,61 @@ export async function exportBreakdownCompositeJSON() {
 }
 
 // ---------- direct-to-Sheets export (experimental, no file step) ----------
-// POSTs the composite breakdown straight to an Apps Script Web App deployment
-// bound to the target Sheet (see doPost() in appsScript.js) — no download,
-// no file picker. URL + token live only in this browser's localStorage, never
-// in the repo; the token is a placeholder gate, not real auth (see the note
-// above doPost() in appsScript.js for the intended swap once the app itself
-// sits behind Google-account-restricted hosting).
-function getSheetsWebAppConfig() {
-  let url = '', token = '';
-  try { url = localStorage.getItem('mushySheetsWebAppUrl') || ''; token = localStorage.getItem('mushySheetsToken') || ''; } catch (e) {}
-  return { url, token };
-}
-function setSheetsWebAppConfig(url, token) {
-  try { localStorage.setItem('mushySheetsWebAppUrl', url); localStorage.setItem('mushySheetsToken', token); } catch (e) {}
-}
-export function configureSheetsWebApp() {
-  const cur = getSheetsWebAppConfig();
-  const url = (prompt('Apps Script Web App URL for this Sheet (Deploy → New deployment → Web app):', cur.url) || '').trim();
-  if (!url) return false;
-  const token = (prompt('Shared token (must match this deployment’s MUSHY_TOKEN script property; blank = no check):', cur.token) || '').trim();
-  setSheetsWebAppConfig(url, token);
-  return true;
+// Signed-in-user version of the composite export: calls the Apps Script
+// Execution API (sheetsApi.js) instead of downloading + picking a JSON file.
+export async function sendBuildDirect() {
+  const data = await buildBreakdownDataComposite();
+  return apiBuild(data);
 }
 
-export async function sendBreakdownDirect() {
-  let cfg = getSheetsWebAppConfig();
-  if (!cfg.url) { if (!configureSheetsWebApp()) throw new Error('No Web App URL set.'); cfg = getSheetsWebAppConfig(); }
-  const data = await buildBreakdownDataComposite();
-  const resp = await fetch(cfg.url, {
-    method: 'POST',
-    // text/plain keeps this a CORS "simple request" — application/json would
-    // trigger a preflight OPTIONS request Apps Script Web Apps don't answer.
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ token: cfg.token, data }),
+/**
+ * "Update active sheet (direct)": mirrors updateActiveSheet()'s own matching
+ * (by tag||name), computed here instead of in Apps Script since the client
+ * needs the final row order BEFORE it can build a single composite image
+ * covering every row. Existing rows keep their current relative order
+ * (matched ones get a fresh thumbnail + length, unmatched ones are flagged
+ * removed with no picture — see the note in appsScript.js on why a removed
+ * row's old picture can't be preserved once images are merged into one
+ * strip); anything in the live project not already on the sheet is appended
+ * as new, in project order — same shape updateActiveSheet() produces.
+ */
+export async function sendUpdateDirect() {
+  const sync = await apiSyncSheetState();
+  const existingNames = (sync && sync.names) || [];
+  if (!existingNames.length) throw new Error('No existing breakdown rows found — use "Build new sheet (direct)" first.');
+
+  const liveByKey = new Map();
+  P.shots.forEach((sh) => {
+    const m = shotMeta(P, sh);
+    const key = (m.tag || sh.name || '').toString();
+    if (key) liveByKey.set(key, sh);
   });
-  let json = null;
-  try { json = await resp.json(); } catch (e) {}
-  if (!json) throw new Error('No response from the Web App — check the URL and that it’s deployed with "Anyone" access.');
-  if (json.error) throw new Error(json.error);
-  return json;
+
+  const used = new Set();
+  const finalRows = [];
+  const entries = [];
+  existingNames.forEach((nm) => {
+    const sh = liveByKey.get(nm);
+    if (sh) {
+      used.add(nm);
+      const m = shotMeta(P, sh);
+      finalRows.push({ name: sh.name || '', tag: m.tag || '', length: lenToUnit(P, shotLenSec(P, sh)), isNew: false, removed: false });
+      entries.push(shotMontage(sh));
+    } else {
+      finalRows.push({ name: nm, removed: true });
+      entries.push(null);
+    }
+  });
+  P.shots.forEach((sh, si) => {
+    const m = shotMeta(P, sh);
+    const key = (m.tag || sh.name || '').toString();
+    if (key && used.has(key)) return;
+    finalRows.push({ id: si + 1, name: sh.name || '', tag: m.tag || '', length: lenToUnit(P, shotLenSec(P, sh)), note: m.note || '', isNew: true, removed: false });
+    entries.push(shotMontage(sh));
+  });
+
+  const strip = await buildStrip(entries, STRIP_MONTAGE_W);
+  return apiUpdateComposite({ finalRows, strip });
 }
 
 // ---------- modal shell ----------
