@@ -1,21 +1,28 @@
 // Google Sheets export: sign in, pick (or create) a Sheet in the user's own
 // Drive, upload each row's thumbnail to Drive, then write the whole
-// breakdown tab in one Sheets API batchUpdate. No Apps Script anywhere.
+// breakdown tab in one Sheets API batchUpdate.
 //
-// Images: the Sheets API can't upload image bytes into a sheet — the only
-// way to show a picture is an =IMAGE(url) formula whose URL Google's servers
-// can fetch without logging in. So each thumbnail is uploaded to a "Mushy
-// Edit thumbnails" folder in the user's Drive and shared "anyone with the
-// link" (random, unlisted URLs). Uploads run in parallel, which is what keeps
-// this fast; the old Apps Script path had to insertImage() one row at a time.
+// Images, in two stages:
+//  1. Fast links. The Sheets API can't upload image bytes into a sheet — it
+//     can only write =IMAGE(url) formulas whose URL Google's servers can fetch
+//     without logging in. So each thumbnail is uploaded (in parallel) to a
+//     "Mushy Edit thumbnails" folder in the user's Drive, shared "anyone with
+//     the link", and the tab is written with those links. The Sheet is
+//     complete and usable at this point.
+//  2. Embed, in the background. A small Apps Script (apps-script/embed/ in
+//     this repo), deployed once by us as an API executable in the same GCP
+//     project, is called via scripts.run with the user's own token. It turns
+//     each linked picture into an image stored inside the Sheet; the app then
+//     deletes those Drive files, so no public links are left behind. If this
+//     stage fails, the links simply stay and the Sheet still works.
 //
 // Sign-in happens in a separate helper window (public/google-connect.html)
 // because the editor's Cross-Origin-Opener-Policy header (needed by
 // ffmpeg.wasm) cuts the link to Google's sign-in popup. openConnect() must be
 // called synchronously inside a click handler so window.open isn't blocked.
 //
-// Scope is drive.file only: access to Sheets the user picks/creates here and
-// files this app uploads — nothing else in their Drive.
+// Scopes: drive.file (Sheets the user picks/creates here and files this app
+// uploads) plus spreadsheets, which the embed script needs to open the Sheet.
 
 const CLIENT_ID = '902841680403-3ua13oavs9ic6m4i1e6si7hl2b0q3qup.apps.googleusercontent.com';
 // Browser key, restricted in GCP to the Picker API and to this app's origins.
@@ -25,6 +32,11 @@ const APP_ID = '902841680403'; // GCP project number; Picker uses it to grant dr
 const CHANNEL = 'mushy-google';
 const THUMB_FOLDER = 'Mushy Edit thumbnails';
 const UPLOAD_CONCURRENCY = 6;
+// Deployment ID of apps-script/embed (project "Mushy Edit - Embed Images",
+// owned by eperello@hellohornet.com, GCP project Ray AI). A redeploy that
+// creates a NEW deployment changes this ID; editing the existing deployment
+// to a new version keeps it.
+const EMBED_SCRIPT_ID = 'AKfycbwIjQ53RSdI1e4fcEz3BlkHWDlQroJ1TsSOSoNiMulIR3fVYnTVqkYk3-4tikrXavIk';
 
 export const MONTAGE_W = 300; // px width of a shot's Storyboard picture in the sheet
 export const REF_W = 320;     // px width of an asset's Reference picture
@@ -136,6 +148,34 @@ async function trashFiles(ids) {
     api(`https://www.googleapis.com/drive/v3/files/${id}`, { method: 'DELETE' }).catch(() => null));
 }
 
+// ---------- stage 2: embed pictures, then delete their Drive files ----------
+/**
+ * cells: [{ sheetId, row, col, fileId }] for pictures just written as links.
+ * Never rejects; resolves { embedded, total, error }. Cells the script
+ * couldn't embed keep their link and their Drive file.
+ */
+async function embedPictures(spreadsheetId, cells) {
+  const total = cells.length;
+  if (!total) return { embedded: 0, total, error: null };
+  try {
+    const res = await api(`https://script.googleapis.com/v1/scripts/${EMBED_SCRIPT_ID}:run`, {
+      method: 'POST',
+      json: { function: 'embedImages', parameters: [spreadsheetId, cells.map(({ sheetId, row, col, fileId }) => ({ sheetId, row, col, url: imageUrl(fileId) }))] },
+    });
+    if (res.error) {
+      const d = (res.error.details || [])[0];
+      throw new Error((d && d.errorMessage) || res.error.message || 'Embed script failed');
+    }
+    const ok = (res.response && res.response.result) || [];
+    const done = cells.filter((_, i) => ok[i]).map((c) => c.fileId);
+    await trashFiles(done);
+    return { embedded: done.length, total, error: null };
+  } catch (e) {
+    console.warn('Embedding pictures failed; links stay in place.', e);
+    return { embedded: 0, total, error: e.message || String(e) };
+  }
+}
+
 // ---------- Sheets cell helpers ----------
 const rgb = (hex) => ({ red: parseInt(hex.slice(1, 3), 16) / 255, green: parseInt(hex.slice(3, 5), 16) / 255, blue: parseInt(hex.slice(5, 7), 16) / 255 });
 const HEADER_FMT = { backgroundColor: rgb('#22262f'), textFormat: { bold: true, foregroundColor: rgb('#e6e8ec') }, verticalAlignment: 'MIDDLE' };
@@ -200,10 +240,12 @@ export async function buildBreakdownSheet({ spreadsheetId, createTitle, data, ba
 
   onStatus && onStatus('Writing sheet…');
   const requests = [];
+  const pics = []; // { sheetId, row, col, fileId } for stage 2
   const when = stamp();
 
   // Shots tab
   const sheetId = newSheetId();
+  shotIds.forEach((fileId, i) => { if (fileId) pics.push({ sheetId, row: i + 1, col: 1, fileId }); });
   const stages = shotStages(data);
   const headers = ['Shot', 'Storyboard', 'Name', `Length (${data.lenUnit === 'frames' ? 'f' : 's'})`, ...stages.map(cap), 'Notes'];
   const firstStage = 4, notesCol = firstStage + stages.length;
@@ -230,6 +272,7 @@ export async function buildBreakdownSheet({ spreadsheetId, createTitle, data, ba
   // Assets tab
   if (assets.length) {
     const aId = newSheetId();
+    assetIds.forEach((fileId, i) => { if (fileId) pics.push({ sheetId: aId, row: i + 1, col: 1, fileId }); });
     const tasks = data.assetTasks && data.assetTasks.length ? data.assetTasks : ['model', 'lookdev', 'rig'];
     const aHeaders = ['Category', 'Reference', 'Asset', ...tasks.map(cap)];
     const aRows = assets.map(({ a, catLabel }, i) => {
@@ -252,6 +295,7 @@ export async function buildBreakdownSheet({ spreadsheetId, createTitle, data, ba
   return {
     spreadsheetId, sheetId, shots: shots.length, assets: assets.length,
     url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetId}`,
+    embedding: embedPictures(spreadsheetId, pics), // runs on after the Sheet is ready
   };
 }
 
@@ -294,6 +338,7 @@ export async function updateBreakdownSheet({ spreadsheetId, sheetId, data, baseN
 
   onStatus && onStatus('Updating sheet…');
   const requests = [];
+  const pics = []; // { sheetId, row, col, fileId } for stage 2
   const replaced = [];
   const seen = new Set();
   let appendAt = Math.max(grid.length, 1), updated = 0, added = 0, removed = 0;
@@ -306,15 +351,16 @@ export async function updateBreakdownSheet({ spreadsheetId, sheetId, data, baseN
     const pic = ids[i] ? cell(image(ids[i], MONTAGE_W, h)) : null;
     if (row != null) {
       seen.add(key);
+      // Only still-linked pictures have a Drive file; embedded ones don't.
       const old = fileIdFromFormula((grid[row] || [])[storyC]);
-      if (pic) { requests.push(setCell(sheetId, row, storyC, pic)); if (old) replaced.push(old); }
+      if (pic) { requests.push(setCell(sheetId, row, storyC, pic)); pics.push({ sheetId, row, col: storyC, fileId: ids[i] }); if (old) replaced.push(old); }
       if (lenC >= 0 && s.length != null) requests.push(setCell(sheetId, row, lenC, cell(s.length, { horizontalAlignment: 'CENTER' })));
       requests.push(rowHeight(sheetId, row, h + PAD));
       updated++;
     } else {
       const r = appendAt++;
       if (shotC >= 0) requests.push(setCell(sheetId, r, shotC, cell(s.id)));
-      if (pic) requests.push(setCell(sheetId, r, storyC, pic));
+      if (pic) { requests.push(setCell(sheetId, r, storyC, pic)); pics.push({ sheetId, row: r, col: storyC, fileId: ids[i] }); }
       requests.push(setCell(sheetId, r, nameC, cell(key, { wrapStrategy: 'WRAP' })));
       if (lenC >= 0 && s.length != null) requests.push(setCell(sheetId, r, lenC, cell(s.length, { horizontalAlignment: 'CENTER' })));
       if (notesC >= 0) requests.push(setCell(sheetId, r, notesC, cell(s.note || '', { wrapStrategy: 'WRAP' })));
@@ -345,5 +391,6 @@ export async function updateBreakdownSheet({ spreadsheetId, sheetId, data, baseN
   return {
     spreadsheetId, sheetId, updated, added, removed,
     url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetId}`,
+    embedding: embedPictures(spreadsheetId, pics), // runs on after the Sheet is ready
   };
 }

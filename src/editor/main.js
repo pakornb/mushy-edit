@@ -504,8 +504,14 @@ function wire() {
   // openConnect() opens a window, so it has to run synchronously inside the
   // click — anything awaited before it and the browser blocks the popup.
   const runSheets = async (task) => {
-    try { const res = await task(overlay); overlay(false); showSheetResult(res); }
-    catch (e) { overlay(false); console.error(e); if (e.message !== 'Cancelled.') toast(e.message || 'Google Sheets export failed'); }
+    let res;
+    try { res = await task(overlay); overlay(false); showSheetResult(res); }
+    catch (e) { overlay(false); console.error(e); if (e.message !== 'Cancelled.') toast(e.message || 'Google Sheets export failed'); return; }
+    // The Sheet is already usable with linked pictures; embedding finishes on its own.
+    const emb = await res.embedding;
+    if (!emb || !emb.total) return;
+    if (emb.error) toast('Pictures stay as Drive links (embedding failed: ' + emb.error + ')');
+    else toast(`Pictures embedded in the Sheet (${emb.embedded}/${emb.total})`);
   };
   $('mSheetExport').onclick = () => {
     $('exportMenu').classList.add('hidden');

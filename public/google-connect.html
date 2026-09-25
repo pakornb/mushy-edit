@@ -41,7 +41,7 @@
   <h1><span class="dot">▍</span> Google Sheets</h1>
 
   <div id="signin">
-    <p>Sign in with the Google account that should own the breakdown. Mushy Edit only gets access to Sheets you pick or create here, and to the thumbnail images it uploads.</p>
+    <p>Sign in with the Google account that should own the breakdown. Mushy Edit writes the breakdown into the Sheet you pick or create here, and stores the pictures inside that Sheet.</p>
     <button class="primary" id="signinBtn">Continue with Google</button>
   </div>
 
@@ -66,10 +66,12 @@
   var appId = q.get('app');
   var cur = q.get('cur');
   var curName = q.get('curName');
-  // drive.file: only files this app creates or the user picks — no access to
-  // the rest of their Drive, and a non-sensitive scope (no "unverified app"
-  // warning, no 100-user cap).
-  var SCOPE = 'https://www.googleapis.com/auth/drive.file';
+  // drive.file: only Drive files this app creates or the user picks.
+  // spreadsheets: needed by the embed script (apps-script/embed), which turns
+  // the linked thumbnails into images stored in the Sheet. It's a sensitive
+  // scope — fine for Hornet accounts; outside accounts see an "unverified
+  // app" warning until the OAuth consent screen is verified.
+  var SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets';
 
   var bc = new BroadcastChannel('mushy-google');
   var sent = false;

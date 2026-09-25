@@ -53,7 +53,8 @@ just `npm install && npm run build` in place. Always run a build before committi
   `?src=<url>` also works).
 - `src/io/appsScript.js` — **generated** string of the Google Apps Script; see note.
 - `src/io/googleSheets.js` — Google Sheets export: sign-in handoff, Drive thumbnail uploads, one-batch
-  Sheet writes; `public/google-connect.html` is its sign-in/Picker helper window. See note below.
+  Sheet writes, background embed; `public/google-connect.html` is its sign-in/Picker helper window;
+  `apps-script/embed/` is the centrally deployed embed script. See note below.
 
 ## The timing model (read before touching retiming)
 - **Source of truth = per-board duration in seconds, keyed by filename** (`project.boardDur`
@@ -124,17 +125,31 @@ just `npm install && npm run build` in place. Always run a build before committi
   must match `MONTAGE_W`/`PAD` in the `.gs` (kept as plain numeric literals in both, not shared —
   check both when changing thumbnail sizing).
 - **Google Sheets export ("Export to Google Sheet…" / "Update Google Sheet") — the main path.**
-  No Apps Script. `src/io/googleSheets.js` + `public/google-connect.html`. The user signs in, picks
-  any Sheet in their Drive with Google's Picker (or creates one), and the breakdown is added as a new
-  tab. Flow: upload each row's thumbnail to a "Mushy Edit thumbnails" folder in the user's Drive
-  (parallel, `UPLOAD_CONCURRENCY`), share each "anyone with the link", then write the whole tab in
-  **one** `spreadsheets.batchUpdate` with `=IMAGE(url, 4, h, w)` formulas. Scope is `drive.file`
-  only (files the user picks/creates here + files this app uploads) — non-sensitive, so no
-  "unverified app" warning or 100-user cap.
-  - **Why images are link-shared Drive files:** the Sheets REST API cannot upload image bytes into a
-    sheet — `=IMAGE()` is the only way to show a picture, and its URL must be fetchable by Google
-    without login. That's the only reason the old path used Apps Script (`insertImage`). Accepted
-    trade-off: thumbnails are unlisted "anyone with the link" files, not Hornet-only.
+  No per-user Apps Script setup. `src/io/googleSheets.js` + `public/google-connect.html`. The user
+  signs in, picks any Sheet in their Drive with Google's Picker (or creates one), and the breakdown
+  is added as a new tab. Two stages:
+  1. **Fast links:** upload each row's thumbnail to a "Mushy Edit thumbnails" folder in the user's
+     Drive (parallel, `UPLOAD_CONCURRENCY`), share each "anyone with the link", then write the whole
+     tab in **one** `spreadsheets.batchUpdate` with `=IMAGE(url, 4, h, w)` formulas. The result
+     modal shows here — the Sheet is already complete.
+  2. **Embed (background):** `embedPictures()` calls the Apps Script in `apps-script/embed/` via
+     `scripts.run` with the user's token. It swaps each `=IMAGE()` for an in-cell image
+     (`newCellImage().setSourceUrl()`), reads back which cells took, and the app deletes those Drive
+     files — so no public links remain. Failure never rejects: links just stay, and a toast says so.
+  - **Why stage 1 exists:** the Sheets REST API cannot upload image bytes into a sheet — `=IMAGE()`
+    with a URL Google can fetch without login is the only API route to a picture. Stage 2 needs
+    Apps Script because only `SpreadsheetApp` can create cell images.
+  - **The embed script is deployed once, centrally**, not per user: project "Mushy Edit - Embed
+    Images" owned by eperello@hellohornet.com, GCP project switched to Ray AI (required —
+    `scripts.run` only works when the script and the OAuth client share a GCP project), deployed as
+    an **API executable**, access "Anyone with Google account". Its deployment ID is
+    `EMBED_SCRIPT_ID` in `googleSheets.js`. **After editing the script:** paste the new code in,
+    then Deploy → Manage deployments → edit the existing deployment → New version (keeps the ID; a
+    brand-new deployment changes it). The repo copy is the source of truth.
+  - **Scopes:** `drive.file` + `spreadsheets` (the script's manifest declares `spreadsheets`, and
+    the caller's token must carry every scope the script uses). `spreadsheets` is sensitive: fine
+    for Hornet accounts; outside accounts see "unverified app" until the consent screen is verified.
+    If a user unticks it at consent, stage 2 fails and links stay.
   - **Why sign-in happens in a helper window:** the editor's `Cross-Origin-Opener-Policy:
     same-origin` (ffmpeg.wasm needs it) severs the link to any cross-origin popup, so Google's
     sign-in popup could never return its token — it opened, you approved, it closed, nothing
@@ -146,8 +161,9 @@ just `npm install && npm run build` in place. Always run a build before committi
   - **Update** follows the original Apps Script "Update active sheet" rules: match by Name; matched
     rows get a fresh picture + Length only (Shot/Notes/stage values untouched); new shots appended;
     vanished shots flagged red with "[not in latest]" and **keep their last picture** (per-row
-    `=IMAGE()` restores this — the composite-strip experiment couldn't). Replaced thumbnails are
-    deleted from Drive afterwards. Targets `project.sheetsTabId` (numeric sheet id, survives tab
+    picture restores this — the composite-strip experiment couldn't). New pictures go through the
+    same two stages; replaced pictures that were still links have their Drive files deleted
+    (embedded ones have no Drive file). Targets `project.sheetsTabId` (numeric sheet id, survives tab
     renames) in `project.sheetsSpreadsheetId`; both saved in the work file but deliberately NOT in
     undo snapshots (`captureState`) — they record where an export went, not an edit.
   - **Config (hardcoded in `googleSheets.js`, all non-secret):** `CLIENT_ID` = the shared
