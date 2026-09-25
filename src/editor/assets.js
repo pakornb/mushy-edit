@@ -18,7 +18,7 @@ function shotMontage(sh, cols = 3, cell = 200) {
   const cw = cell, ch = Math.round(cell * t0.height / t0.width);
   const n = boards.length, c = Math.min(cols, n), r = Math.ceil(n / c);
   const cv = document.createElement('canvas'); cv.width = c * cw; cv.height = r * ch;
-  const ctx = cv.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
   boards.forEach((fi, i) => { const rr = Math.floor(i / c), cc = i % c; ctx.drawImage(P.frames[fi].thumb, cc * cw, rr * ch, cw, ch); });
   return { url: cv.toDataURL('image/jpeg', 0.72), w: cv.width, h: cv.height };
 }
@@ -54,7 +54,7 @@ export async function buildBreakdownData(withThumbs = true) {
     const m = shotMeta(P, sh);
     const mont = withThumbs ? shotMontage(sh) : null;
     return {
-      id: si + 1, name: sh.name || '', tag: m.tag || '',
+      id: si + 1, name: sh.name || P.frames[sh.start].name, tag: m.tag || '',
       length: lenToUnit(P, shotLenSec(P, sh)), note: m.note || '',
       taskVals: m.taskVals || m.stageVals || {}, disabled: isShotDisabled(P, sh),
       thumbnail: mont ? mont.url : null, thumbW: mont ? mont.w : 152, thumbH: mont ? mont.h : 88,
@@ -117,7 +117,7 @@ export async function buildBreakdownDataComposite() {
     const m = shotMeta(P, sh);
     shotEntries.push(shotMontage(sh));
     return {
-      id: si + 1, name: sh.name || '', tag: m.tag || '',
+      id: si + 1, name: sh.name || P.frames[sh.start].name, tag: m.tag || '',
       length: lenToUnit(P, shotLenSec(P, sh)), note: m.note || '',
       taskVals: m.taskVals || m.stageVals || {}, disabled: isShotDisabled(P, sh),
     };
