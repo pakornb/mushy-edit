@@ -71,7 +71,8 @@ function openSplitModal(files) {
   splitFrameReady = false;
   splitPendingFiles = files;
   const iframe = $('splitFrame');
-  iframe.src = '/frame-splitter.html?embedded=1';
+  // Relative: see the comment on the same pattern in googleSheets.js's openConnect().
+  iframe.src = 'frame-splitter.html?embedded=1';
   $('splitModalOverlay').classList.remove('hidden');
 }
 function closeSplitModal() {

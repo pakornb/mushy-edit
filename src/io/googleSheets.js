@@ -59,7 +59,12 @@ export function openConnect({ mode = 'choose', current = null } = {}) {
   const rid = Math.random().toString(36).slice(2);
   const q = new URLSearchParams({ rid, mode, client: CLIENT_ID, key: PICKER_API_KEY, app: APP_ID });
   if (current && current.id) { q.set('cur', current.id); if (current.name) q.set('curName', current.name); }
-  const w = window.open(`/google-connect.html?${q}`, 'mushyGoogleConnect', 'width=480,height=560');
+  // Relative, not `/google-connect.html`: in production this app is served
+  // under a path prefix (tools.hellohornet.com/mushy-edit/), and a
+  // site-root path would miss that prefix. Relies on the page itself always
+  // being loaded with a trailing slash (see worker.js's redirect) so this
+  // resolves against the right base.
+  const w = window.open(`google-connect.html?${q}`, 'mushyGoogleConnect', 'width=480,height=560');
   if (!w) return Promise.reject(new Error('Popup blocked — allow popups for this site and try again.'));
   return new Promise((resolve, reject) => {
     const bc = new BroadcastChannel(CHANNEL);

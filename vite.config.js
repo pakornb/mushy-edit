@@ -19,8 +19,14 @@ const isolation = {
   configurePreviewServer(server) { server.middlewares.use(setIsolation); },
 };
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [isolation],
+  // In production this app is served under tools.hellohornet.com/mushy-edit/
+  // (see worker.js, which strips that prefix before forwarding to the
+  // ASSETS binding) — so the built HTML's asset URLs need the prefix baked
+  // in, or the browser requests them from site root and misses the dashboard's
+  // proxy route entirely. The dev server has no such prefix, so it stays at '/'.
+  base: command === 'build' ? '/mushy-edit/' : '/',
   // ffmpeg.wasm ships as an ESM worker; don't pre-bundle it
   optimizeDeps: { exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'] },
   build: {
@@ -32,4 +38,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));
