@@ -34,10 +34,12 @@ export const project = {
   audio: null,            // { name, blob, url, offsetSec, inSec, outSec } | null
   shots: [],              // computed: { start, end, count, name }
   cuts: new Set(),        // computed shot-start indices
-  sheetsSpreadsheetId: '',    // optional per-project override: use THIS Sheet instead of the
-                              // shared default (direct-to-Sheets export) — travels with the work file.
-  sheetsBreakdownTabName: '', // tab name the last "Build new sheet (direct)" created, so
-                              // "Update active sheet (direct)" knows exactly which tab to target.
+  // Where "Export to Google Sheet…" last put this project's breakdown, so "Update Google
+  // Sheet" can target that exact tab. Saved in the work file; deliberately NOT in undo
+  // snapshots — it records where an export went, not an edit to undo.
+  sheetsSpreadsheetId: '',
+  sheetsSpreadsheetName: '',
+  sheetsTabId: null,
 };
 
 export const IMG_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
@@ -459,14 +461,12 @@ export function captureState(p = project) {
     fitMode: p.fitMode, boardFit: [...p.boardFit.entries()],
     audio: p.audio ? { offsetSec: p.audio.offsetSec, inSec: p.audio.inSec, outSec: p.audio.outSec } : null,
     lastRebalanceSpot: p.lastRebalanceSpot,
-    sheetsSpreadsheetId: p.sheetsSpreadsheetId, sheetsBreakdownTabName: p.sheetsBreakdownTabName,
   });
 }
 export function applyState(p, snap) {
   const s = JSON.parse(snap);
   p.groupMode = s.groupMode; p.threshold = s.threshold; p.fps = s.fps;
   p.lenUnit = s.lenUnit; p.spotSeconds = s.spotSeconds;
-  p.sheetsSpreadsheetId = s.sheetsSpreadsheetId || ''; p.sheetsBreakdownTabName = s.sheetsBreakdownTabName || '';
   p.shotTasks = s.shotTasks || p.shotTasks; p.assetTasks = s.assetTasks || p.assetTasks; p.assetCats = s.assetCats || p.assetCats;
   if (s.assets) { const thumbs = new Map(p.assets.map((a) => [a.id, a.thumb])); p.assets = s.assets.map((a) => ({ ...a, thumb: a.thumb || thumbs.get(a.id) || null })); }
   p.manualAdd = new Set(s.manualAdd); p.manualRemove = new Set(s.manualRemove);

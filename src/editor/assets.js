@@ -5,7 +5,7 @@ import {
 } from '../core/model.js';
 import { mutate } from '../core/history.js';
 import { createAnnotator, annotatorToolbar, drawAnnos } from '../core/annotate.js';
-import { apiBuild, apiSyncSheetState, apiUpdateComposite, beginSignIn, DEFAULT_SPREADSHEET_ID } from '../io/sheetsApi.js';
+import { buildBreakdownSheet, updateBreakdownSheet } from '../io/googleSheets.js';
 
 let refresh = () => {};
 export function setRefresh(fn) { refresh = fn; }
@@ -151,98 +151,52 @@ export async function exportBreakdownCompositeJSON() {
   a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-// ---------- direct-to-Sheets export (experimental, no file step) ----------
-// Signed-in-user version of the composite export: calls the Apps Script
-// Execution API (sheetsApi.js) instead of downloading + picking a JSON file.
-// No configuration needed by default — projects land in the one shared
-// "Mushy Edit Breakdowns" Sheet (DEFAULT_SPREADSHEET_ID). project.sheetsSpreadsheetId
-// is an OPTIONAL per-project override (a plain Sheet URL, saved in the work
-// file so it travels with the project) for anyone who wants a show to land
-// in its own separate Sheet — nothing to set up on that Sheet beyond normal
-// Google sharing permissions, since one shared deployment serves any Sheet.
-export function setSheetsSpreadsheet(urlOrId) {
-  const s = (urlOrId || '').trim();
-  const m = s.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  const id = m ? m[1] : s;
-  mutate(() => { P.sheetsSpreadsheetId = id; P.sheetsBreakdownTabName = ''; });
-}
-export function promptSheetsSpreadsheet() {
-  const cur = P.sheetsSpreadsheetId ? `https://docs.google.com/spreadsheets/d/${P.sheetsSpreadsheetId}/edit` : '';
-  const url = (prompt('Google Sheet URL to use for this project (leave blank to use the shared default Sheet):', cur) || '').trim();
-  if (!url) { if (!cur) return false; mutate(() => { P.sheetsSpreadsheetId = ''; P.sheetsBreakdownTabName = ''; }); return true; }
-  setSheetsSpreadsheet(url);
-  return true;
-}
-
-function resolveSpreadsheetId() {
-  return P.sheetsSpreadsheetId || DEFAULT_SPREADSHEET_ID;
-}
-
-export async function sendBuildDirect() {
-  const spreadsheetId = resolveSpreadsheetId();
-  // Fire the sign-in popup request immediately, before the slow (canvas-heavy)
-  // composite build — browsers can silently drop a popup triggered too long
-  // after the click, so this has to start as close to the click as possible.
-  // apiBuild() below calls getAccessToken() again, but only after signInPromise
-  // is awaited, so it just reuses the now-cached token — no second popup.
-  const signInPromise = beginSignIn();
-  const data = await buildBreakdownDataComposite();
-  await signInPromise;
-  const res = await apiBuild(spreadsheetId, data);
-  if (res && res.sheetName) mutate(() => { P.sheetsBreakdownTabName = res.sheetName; });
-  return res;
-}
-
-/**
- * "Update active sheet (direct)": mirrors updateActiveSheet()'s own matching
- * (by tag||name), computed here instead of in Apps Script since the client
- * needs the final row order BEFORE it can build a single composite image
- * covering every row. Existing rows keep their current relative order
- * (matched ones get a fresh thumbnail + length, unmatched ones are flagged
- * removed with no picture — see the note in appsScript.js on why a removed
- * row's old picture can't be preserved once images are merged into one
- * strip); anything in the live project not already on the sheet is appended
- * as new, in project order — same shape updateActiveSheet() produces.
- */
-export async function sendUpdateDirect() {
-  const spreadsheetId = resolveSpreadsheetId();
-  if (!P.sheetsBreakdownTabName) throw new Error('No breakdown tab known for this project yet — use "Build new sheet (direct)" first.');
-  const sync = await apiSyncSheetState(spreadsheetId, P.sheetsBreakdownTabName);
-  const existingNames = (sync && sync.names) || [];
-  if (!existingNames.length) throw new Error('No existing breakdown rows found — use "Build new sheet (direct)" first.');
-
-  const liveByKey = new Map();
-  P.shots.forEach((sh) => {
-    const m = shotMeta(P, sh);
-    const key = (m.tag || sh.name || '').toString();
-    if (key) liveByKey.set(key, sh);
+// ---------- Google Sheets export ----------
+// Build a new breakdown tab in a Sheet the user picks (or creates) in their
+// own Drive, or update the tab this project exported to last time. The
+// connect promise comes from openConnect(), which main.js has to call
+// synchronously inside the click so its helper window isn't popup-blocked.
+// Which Sheet/tab a project exported to is saved in the work file
+// (project.sheetsSpreadsheetId / sheetsSpreadsheetName / sheetsTabId).
+export async function exportToGoogleSheet(connect, onStatus) {
+  onStatus('Waiting for Google…');
+  const choice = await connect;
+  const t0 = performance.now();
+  onStatus('Preparing thumbnails…');
+  const data = await buildBreakdownData(true);
+  const res = await buildBreakdownSheet({
+    spreadsheetId: choice.create ? null : choice.spreadsheetId,
+    createTitle: `${P.baseName} breakdown`,
+    data, baseName: P.baseName, onStatus,
   });
+  P.sheetsSpreadsheetId = res.spreadsheetId;
+  P.sheetsSpreadsheetName = choice.create ? `${P.baseName} breakdown` : (choice.spreadsheetName || '');
+  P.sheetsTabId = res.sheetId;
+  return { ...res, seconds: (performance.now() - t0) / 1000 };
+}
 
-  const used = new Set();
-  const finalRows = [];
-  const entries = [];
-  existingNames.forEach((nm) => {
-    const sh = liveByKey.get(nm);
-    if (sh) {
-      used.add(nm);
-      const m = shotMeta(P, sh);
-      finalRows.push({ name: sh.name || '', tag: m.tag || '', length: lenToUnit(P, shotLenSec(P, sh)), isNew: false, removed: false });
-      entries.push(shotMontage(sh));
-    } else {
-      finalRows.push({ name: nm, removed: true });
-      entries.push(null);
-    }
+export async function updateGoogleSheet(connect, onStatus) {
+  if (connect) { onStatus('Waiting for Google…'); await connect; }
+  const t0 = performance.now();
+  onStatus('Preparing thumbnails…');
+  const data = await buildBreakdownData(true);
+  const res = await updateBreakdownSheet({
+    spreadsheetId: P.sheetsSpreadsheetId, sheetId: P.sheetsTabId, data, baseName: P.baseName, onStatus,
   });
-  P.shots.forEach((sh, si) => {
-    const m = shotMeta(P, sh);
-    const key = (m.tag || sh.name || '').toString();
-    if (key && used.has(key)) return;
-    finalRows.push({ id: si + 1, name: sh.name || '', tag: m.tag || '', length: lenToUnit(P, shotLenSec(P, sh)), note: m.note || '', isNew: true, removed: false });
-    entries.push(shotMontage(sh));
-  });
+  return { ...res, seconds: (performance.now() - t0) / 1000 };
+}
 
-  const strip = await buildStrip(entries, STRIP_MONTAGE_W);
-  return apiUpdateComposite(spreadsheetId, P.sheetsBreakdownTabName, { finalRows, strip });
+export function showSheetResult(res) {
+  modal('Google Sheet ready', (body) => {
+    const p = el('p', '');
+    p.textContent = res.updated != null
+      ? `Updated — ${res.updated} refreshed, ${res.added} added, ${res.removed} flagged, in ${res.seconds.toFixed(1)}s.`
+      : `Exported ${res.shots} shots${res.assets ? ` and ${res.assets} assets` : ''} in ${res.seconds.toFixed(1)}s.`;
+    const a = document.createElement('a');
+    a.href = res.url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'btn';
+    a.textContent = 'Open in Google Sheets ↗';
+    body.append(p, a);
+  });
 }
 
 // ---------- modal shell ----------

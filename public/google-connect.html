@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mushy Edit — Google Sheets</title>
+<!--
+  Sign-in + Sheet picker for Mushy Edit's Google Sheets export.
+
+  Why this is a separate window: the editor is served with
+  Cross-Origin-Opener-Policy: same-origin (ffmpeg.wasm needs it), which cuts
+  the link between the editor and any popup to another site. Google's
+  sign-in popup can then never hand its token back. This page is served
+  WITHOUT that header (see vite.config.js / vercel.json), so Google's popup
+  and Picker work normally here, and the result goes back to the editor over
+  a BroadcastChannel, which same-origin windows share regardless of COOP.
+-->
+<style>
+  :root { --bg:#14161a; --panel:#1c1f26; --line:#2e333d; --text:#e6e8ec; --dim:#8a929e; --accent:#ff8a3d; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; }
+  .wrap { max-width:420px; margin:0 auto; padding:32px 24px; }
+  h1 { font:600 15px ui-monospace,'SF Mono',Menlo,Consolas,monospace; letter-spacing:.03em; text-transform:uppercase; margin:0 0 6px; }
+  h1 .dot { color:var(--accent); }
+  p { color:var(--dim); font-size:13px; line-height:1.5; margin:0 0 20px; }
+  button { display:block; width:100%; box-sizing:border-box; margin:0 0 10px; padding:11px 14px;
+    border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--text);
+    font:500 14px inherit; text-align:left; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#1a1206; font-weight:600; text-align:center; }
+  button:disabled { opacity:.5; cursor:default; }
+  .sub { display:block; color:var(--dim); font-size:12px; font-weight:400; margin-top:2px; }
+  .primary .sub { color:#3a2410; }
+  #status { color:var(--dim); font-size:12px; min-height:16px; margin-top:8px; }
+  #status.err { color:#ff8a8a; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="dot">▍</span> Google Sheets</h1>
+
+  <div id="signin">
+    <p>Sign in with the Google account that should own the breakdown. Mushy Edit only gets access to Sheets you pick or create here, and to the thumbnail images it uploads.</p>
+    <button class="primary" id="signinBtn">Continue with Google</button>
+  </div>
+
+  <div id="choose" class="hidden">
+    <p>Where should the breakdown go? It's added as a new tab, so nothing already in the Sheet is touched.</p>
+    <button id="useCurrent" class="hidden"></button>
+    <button id="pickBtn">Choose a Google Sheet…<span class="sub">Any spreadsheet in your Drive</span></button>
+    <button id="createBtn">Create a new Google Sheet<span class="sub">Made in your Drive, named after this project</span></button>
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var q = new URLSearchParams(location.search);
+  var rid = q.get('rid');
+  var mode = q.get('mode') || 'choose';
+  var clientId = q.get('client');
+  var apiKey = q.get('key');
+  var appId = q.get('app');
+  var cur = q.get('cur');
+  var curName = q.get('curName');
+  // drive.file: only files this app creates or the user picks — no access to
+  // the rest of their Drive, and a non-sensitive scope (no "unverified app"
+  // warning, no 100-user cap).
+  var SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+  var bc = new BroadcastChannel('mushy-google');
+  var sent = false;
+  var token = null, expiresIn = 3600;
+
+  function send(msg) {
+    msg.rid = rid;
+    bc.postMessage(msg);
+    sent = true;
+    setTimeout(function () { window.close(); }, 50);
+  }
+  window.addEventListener('pagehide', function () { if (!sent) bc.postMessage({ rid: rid, type: 'cancel' }); });
+
+  var statusEl = document.getElementById('status');
+  function status(msg, isErr) { statusEl.textContent = msg || ''; statusEl.className = isErr ? 'err' : ''; }
+
+  function loadScript(src) {
+    return new Promise(function (res, rej) {
+      var s = document.createElement('script'); s.src = src; s.async = true;
+      s.onload = res; s.onerror = function () { rej(new Error('Could not load ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  var gisReady = loadScript('https://accounts.google.com/gsi/client');
+  var pickerReady = loadScript('https://apis.google.com/js/api.js').then(function () {
+    return new Promise(function (res) { gapi.load('picker', res); });
+  });
+
+  var signinBtn = document.getElementById('signinBtn');
+  signinBtn.disabled = true;
+  gisReady.then(function () { signinBtn.disabled = false; }, function (e) { status(e.message, true); });
+
+  signinBtn.onclick = function () {
+    var client = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: SCOPE,
+      callback: function (resp) {
+        if (resp.error) { status('Sign-in failed: ' + resp.error, true); return; }
+        token = resp.access_token;
+        expiresIn = +resp.expires_in || 3600;
+        if (mode === 'signin') { send({ type: 'result', token: token, expiresIn: expiresIn }); return; }
+        showChoices();
+      },
+      error_callback: function (err) { status('Sign-in was closed or blocked (' + (err && err.type || 'unknown') + ').', true); },
+    });
+    client.requestAccessToken();
+  };
+
+  function showChoices() {
+    document.getElementById('signin').classList.add('hidden');
+    document.getElementById('choose').classList.remove('hidden');
+    if (cur) {
+      var b = document.getElementById('useCurrent');
+      b.innerHTML = '';
+      b.appendChild(document.createTextNode('Use ' + (curName ? '“' + curName + '”' : 'this project’s Sheet')));
+      var sub = document.createElement('span'); sub.className = 'sub'; sub.textContent = 'The Sheet this project exported to last time';
+      b.appendChild(sub);
+      b.classList.remove('hidden');
+      b.onclick = function () { send({ type: 'result', token: token, expiresIn: expiresIn, spreadsheetId: cur, spreadsheetName: curName || '' }); };
+    }
+  }
+
+  document.getElementById('createBtn').onclick = function () {
+    send({ type: 'result', token: token, expiresIn: expiresIn, create: true });
+  };
+
+  document.getElementById('pickBtn').onclick = function () {
+    status('Opening your Drive…');
+    pickerReady.then(function () {
+      var view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
+        .setMode(google.picker.DocsViewMode.LIST);
+      var picker = new google.picker.PickerBuilder()
+        .addView(view)
+        .setOAuthToken(token)
+        .setDeveloperKey(apiKey)
+        // setAppId is what grants this app drive.file access to the picked Sheet.
+        .setAppId(appId)
+        .setTitle('Choose a Google Sheet for the breakdown')
+        .setCallback(function (data) {
+          if (data.action === google.picker.Action.PICKED) {
+            var doc = data.docs[0];
+            send({ type: 'result', token: token, expiresIn: expiresIn, spreadsheetId: doc.id, spreadsheetName: doc.name });
+          } else if (data.action === google.picker.Action.CANCEL) {
+            status('');
+          }
+        })
+        .build();
+      picker.setVisible(true);
+      status('');
+    }, function (e) { status(e.message, true); });
+  };
+})();
+</script>
+</body>
+</html>

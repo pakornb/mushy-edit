@@ -13,7 +13,8 @@ import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture } from '../core/history.js';
 import { APPS_SCRIPT } from '../io/appsScript.js';
-import { openAssetWindow, openPreview, exportBreakdownJSON, exportBreakdownCompositeJSON, sendBuildDirect, sendUpdateDirect, promptSheetsSpreadsheet, setRefresh, closeModal } from './assets.js';
+import { openAssetWindow, openPreview, exportBreakdownJSON, exportBreakdownCompositeJSON, exportToGoogleSheet, updateGoogleSheet, showSheetResult, setRefresh, closeModal } from './assets.js';
+import { openConnect, hasToken } from '../io/googleSheets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
 
@@ -500,25 +501,25 @@ function wire() {
     try { overlay('Building composite strip…'); await exportBreakdownCompositeJSON(); toast('Composite breakdown JSON downloaded'); }
     catch (e) { console.error(e); toast('Composite export failed'); } finally { overlay(false); }
   };
-  $('mBuildDirect').onclick = async () => {
-    $('exportMenu').classList.add('hidden');
-    try {
-      overlay('Signing in / building sheet…');
-      const res = await sendBuildDirect();
-      const bits = [`${res.shots} shots`, `${res.placed} placed`];
-      if (res.assets != null) bits.push(`${res.assets} assets`);
-      toast(`Built — ${bits.join(', ')}`);
-    } catch (e) { console.error(e); toast(e.message || 'Build failed'); } finally { overlay(false); }
+  // openConnect() opens a window, so it has to run synchronously inside the
+  // click — anything awaited before it and the browser blocks the popup.
+  const runSheets = async (task) => {
+    try { const res = await task(overlay); overlay(false); showSheetResult(res); }
+    catch (e) { overlay(false); console.error(e); if (e.message !== 'Cancelled.') toast(e.message || 'Google Sheets export failed'); }
   };
-  $('mUpdateDirect').onclick = async () => {
+  $('mSheetExport').onclick = () => {
     $('exportMenu').classList.add('hidden');
-    try {
-      overlay('Signing in / updating sheet…');
-      const res = await sendUpdateDirect();
-      toast(`Updated — ${res.updated} refreshed, ${res.added} added, ${res.removed} flagged`);
-    } catch (e) { console.error(e); toast(e.message || 'Update failed'); } finally { overlay(false); }
+    if (!P.shots.length) { toast('Load some boards first'); return; }
+    const current = P.sheetsSpreadsheetId ? { id: P.sheetsSpreadsheetId, name: P.sheetsSpreadsheetName } : null;
+    const connect = openConnect({ mode: 'choose', current });
+    runSheets((status) => exportToGoogleSheet(connect, status));
   };
-  $('mSheetsConfig').onclick = () => { $('exportMenu').classList.add('hidden'); if (promptSheetsSpreadsheet()) toast('Sheet saved to this project'); };
+  $('mSheetUpdate').onclick = () => {
+    $('exportMenu').classList.add('hidden');
+    if (!P.sheetsSpreadsheetId || P.sheetsTabId == null) { toast('Use "Export to Google Sheet…" first'); return; }
+    const connect = hasToken() ? null : openConnect({ mode: 'signin' });
+    runSheets((status) => updateGoogleSheet(connect, status));
+  };
   $('mCopyGs').onclick = () => { $('exportMenu').classList.add('hidden'); copyGs(); };
   $('annotateBtn').onclick = toggleAnnotate;
   $('mMp4').onclick = () => { $('exportMenu').classList.add('hidden'); runMp4(0); };

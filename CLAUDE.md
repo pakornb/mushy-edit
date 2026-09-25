@@ -15,7 +15,8 @@ When in doubt, keep the tool on the timing/review/handoff side of that line.
 - `npm install` then `npm run dev` (local) / `npm run build` (prod, outputs `dist/`).
 - Two entry points: `index.html` (editor) and `view.html` (read-only viewer). See `vite.config.js`.
 - **COOP/COEP headers** are set in `vercel.json` and the dev server (required so
-  `crossOriginIsolated` is true for ffmpeg.wasm).
+  `crossOriginIsolated` is true for ffmpeg.wasm) — on every page EXCEPT `google-connect.html`.
+  They break any cross-origin popup's link back to the page (Google sign-in); see Google Sheet export.
 - Deps are intentionally minimal: `@ffmpeg/ffmpeg@0.12.10`, `@ffmpeg/util@0.12.1`,
   `jszip`. **Do not bump the ffmpeg versions** (see mp4 note below).
 
@@ -51,8 +52,8 @@ just `npm install && npm run build` in place. Always run a build before committi
 - `src/viewer/main.js` + `view.html` — the read-only review player (loads a viewer JSON;
   `?src=<url>` also works).
 - `src/io/appsScript.js` — **generated** string of the Google Apps Script; see note.
-- `src/io/sheetsApi.js` — Google sign-in (GIS) + Apps Script Execution API (`scripts.run`) client for
-  the direct-to-Sheets export path; see the "Direct-to-Sheets export" note below.
+- `src/io/googleSheets.js` — Google Sheets export: sign-in handoff, Drive thumbnail uploads, one-batch
+  Sheet writes; `public/google-connect.html` is its sign-in/Picker helper window. See note below.
 
 ## The timing model (read before touching retiming)
 - **Source of truth = per-board duration in seconds, keyed by filename** (`project.boardDur`
@@ -122,63 +123,46 @@ just `npm install && npm run build` in place. Always run a build before committi
   what "Update active sheet" always uses. `STRIP_MONTAGE_W`/`STRIP_REF_W`/`STRIP_PAD` in `assets.js`
   must match `MONTAGE_W`/`PAD` in the `.gs` (kept as plain numeric literals in both, not shared —
   check both when changing thumbnail sizing).
-- **Direct-to-Sheets export (experimental, "Build/Update … (direct, experimental)")**: skips the
-  download-then-pick-a-file step by calling the Apps Script **Execution API** (`scripts.run`, see
-  `src/io/sheetsApi.js`) instead — each artist signs in with their own Google account (needs edit
-  access to the target Sheet) rather than every user having to copy-paste and deploy the script
-  themselves.
-  **ONE shared deployment serves every Sheet, not one deployment per Sheet.** `apiBuild` /
-  `apiSyncSheetState` / `apiUpdateComposite` in the `.gs`/`appsScript.js` take a `spreadsheetId` and
-  call `SpreadsheetApp.openById(spreadsheetId)` explicitly, instead of relying on "the active
-  spreadsheet" the way the menu-driven dialogs do (a headless API call has no browser tab to be
-  "active" in). `apiBuild` reuses `buildFromJsonText(text, ss)` directly — the same build functions
-  serve both the menu path (`ss` omitted → falls back to `getActiveSpreadsheet()`) and the API path
-  (`ss` passed explicitly), so there's one code path, not two. This means connecting a *new* show's
-  Sheet is just giving Mushy Edit that Sheet's URL — no Apps Script editor, no GCP console, for any
-  future Sheet, ever. That's only possible because there's no per-Sheet script project or deployment
-  to create: **there is no public API to link an Apps Script project to a specific GCP project**
-  (confirmed — Console-UI-only), which is exactly why this design avoids creating a new script
-  project per Sheet at all, rather than trying to automate that unavoidable step away.
-  `CLIENT_ID` and `DEFAULT_DEPLOYMENT_ID` (both in `sheetsApi.js`) are hardcoded — the shared
-  `hornet-tools` OAuth client and the one shared deployment id, set up exactly once, ever, by
-  whoever administers this (see the header comment of the `.gs` for that one-time setup).
-  `DEFAULT_SPREADSHEET_ID` (also `sheetsApi.js`) is the one shared "Mushy Edit Breakdowns" Sheet
-  every project defaults to with **zero configuration**. `project.sheetsSpreadsheetId` is an
-  *optional* per-project override (a plain Sheet URL, added to `captureState`/`applyState` and
-  `workfile.js` save+open, resolved in `resolveSpreadsheetId()` in `assets.js`) for a project that
-  wants its own separate Sheet — set via Export → "Use a separate Google Sheet for this project…"
-  (`promptSheetsSpreadsheet`) — nothing to set up on that Sheet beyond normal Google sharing
-  permissions, since the one shared deployment can open any Sheet the signed-in user can edit.
-  `project.sheetsBreakdownTabName` remembers exactly which tab `apiBuild` created (its result
-  includes `sheetName`), since "Update active sheet (direct)" needs to target one specific tab and
-  a headless call has no "active tab" to fall back on the way the menu-driven update does. Never
-  move any of this into this browser's `localStorage` — that reintroduces "reconfigure per browser."
-  - **"Update active sheet (direct)"** (`sendUpdateDirect` in `assets.js`) reimplements
-    `updateActiveSheet`'s own by-name matching **client-side**: it calls `apiSyncSheetState()` for
-    the target tab's current Name-column row order, reconciles it against the live project (existing
-    rows keep their relative order and get a fresh thumbnail + length if still present, or get
-    flagged `removed` if not; anything new in the project is appended), builds ONE composite covering
-    that exact final row order, then calls `apiUpdateComposite`. This has to happen client-side — the
-    composite has to be built in the sheet's real final row order, which only the client can
-    determine before sending anything.
-  - **Known gap vs. the original per-row update**: a shot that's vanished from the live project used
-    to keep showing its last-known picture (flagged red, but still visible) — that's not possible
-    anymore once a sheet's images are merged into one strip, since Apps Script has no way to crop a
-    sub-region out of an already-inserted image. A removed row's picture goes blank instead. Notes,
-    stage values, and everything else about the flag-removed/preserve-notes/append-new behavior
-    carries over exactly.
-  - **Popup timing matters.** `requestAccessToken()` has to fire close to the real click — browsers
-    can silently drop the sign-in popup if it's triggered too long after the last user gesture, which
-    made this intermittently hang with zero error on first use (loading the GIS script fresh, then
-    building the composite, both *before* ever requesting a token, was enough delay to trigger it).
-    Fixed two ways: `sheetsApi.js` preloads the GIS script at module load instead of lazily on first
-    use, and `beginSignIn()` lets a caller fire `requestAccessToken()` immediately on click, awaited
-    only after other slow work finishes (see `sendBuildDirect` in `assets.js`) — `apiBuild`'s own
-    `getAccessToken()` call afterward just reuses the now-cached token, not a second popup. Keep this
-    ordering for any new direct-export entry point: kick off `beginSignIn()` before anything slow.
-  - **Unverified against a real deployment**: the `scripts.run` request/response shape follows
-    Google's documented contract, but exact OAuth scopes needed and the error shape when the called
-    script throws haven't been tested live — see the comment at the top of `sheetsApi.js`.
+- **Google Sheets export ("Export to Google Sheet…" / "Update Google Sheet") — the main path.**
+  No Apps Script. `src/io/googleSheets.js` + `public/google-connect.html`. The user signs in, picks
+  any Sheet in their Drive with Google's Picker (or creates one), and the breakdown is added as a new
+  tab. Flow: upload each row's thumbnail to a "Mushy Edit thumbnails" folder in the user's Drive
+  (parallel, `UPLOAD_CONCURRENCY`), share each "anyone with the link", then write the whole tab in
+  **one** `spreadsheets.batchUpdate` with `=IMAGE(url, 4, h, w)` formulas. Scope is `drive.file`
+  only (files the user picks/creates here + files this app uploads) — non-sensitive, so no
+  "unverified app" warning or 100-user cap.
+  - **Why images are link-shared Drive files:** the Sheets REST API cannot upload image bytes into a
+    sheet — `=IMAGE()` is the only way to show a picture, and its URL must be fetchable by Google
+    without login. That's the only reason the old path used Apps Script (`insertImage`). Accepted
+    trade-off: thumbnails are unlisted "anyone with the link" files, not Hornet-only.
+  - **Why sign-in happens in a helper window:** the editor's `Cross-Origin-Opener-Policy:
+    same-origin` (ffmpeg.wasm needs it) severs the link to any cross-origin popup, so Google's
+    sign-in popup could never return its token — it opened, you approved, it closed, nothing
+    happened, in every browser. COEP `require-corp` also blocks the Picker iframe.
+    `google-connect.html` is served WITHOUT COOP/COEP (exempted in `vite.config.js` and
+    `vercel.json`) and reports back over `BroadcastChannel("mushy-google")`, which same-origin
+    windows share regardless of COOP. `openConnect()` must run synchronously inside the click
+    (it calls `window.open`) — await anything first and the popup is blocked.
+  - **Update** follows the original Apps Script "Update active sheet" rules: match by Name; matched
+    rows get a fresh picture + Length only (Shot/Notes/stage values untouched); new shots appended;
+    vanished shots flagged red with "[not in latest]" and **keep their last picture** (per-row
+    `=IMAGE()` restores this — the composite-strip experiment couldn't). Replaced thumbnails are
+    deleted from Drive afterwards. Targets `project.sheetsTabId` (numeric sheet id, survives tab
+    renames) in `project.sheetsSpreadsheetId`; both saved in the work file but deliberately NOT in
+    undo snapshots (`captureState`) — they record where an export went, not an edit.
+  - **Config (hardcoded in `googleSheets.js`, all non-secret):** `CLIENT_ID` = the shared
+    `hornet-tools` OAuth client in GCP project "Ray AI" (`ray-ai-489221`); `PICKER_API_KEY` =
+    browser key restricted to the Picker API + allowed origins; `APP_ID` = GCP project number
+    (Picker needs it to grant `drive.file` on the picked Sheet). **Deploying to a new origin** (e.g.
+    tools.hellohornet.com): add it to the OAuth client's Authorized JavaScript origins AND the API
+    key's website restrictions, or sign-in/Picker fail there. Drive, Sheets, and Picker APIs are
+    enabled on that project.
+  - **`=IMAGE()` URL form:** `https://lh3.googleusercontent.com/d/<fileId>` (`imageUrl()`). Google
+    has broken other Drive direct-link forms before (`uc?export=view`); if thumbnails ever go
+    blank, that's the first thing to check.
+- **Legacy Apps Script path** (Download breakdown JSON → paste `.gs` → Sheet menu import) still
+  exists for now, including the composite-strip JSON. The Apps Script Execution API ("direct")
+  experiment was removed — it needed per-Sheet script setup and hit the COOP popup problem above.
 
 ## Roadmap / next tasks
 1. **Batch B — insert board + update-images-preserve-timing:**
