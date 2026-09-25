@@ -11,14 +11,53 @@ move/scale/rotate/crop). Framing is handled by *fit modes*, not a transform tool
 When in doubt, keep the tool on the timing/review/handoff side of that line.
 
 ## Stack & commands
-- Vite + **vanilla JS** (no framework), deployed on **Vercel**.
+- Vite + **vanilla JS** (no framework). Two deploy targets, both live: **Vercel**
+  (`vercel.json`, standalone, own domain) and a **Cloudflare Worker** behind the
+  `hornet-animation/tools-dashboard` gateway at `tools.hellohornet.com/mushy-edit/`
+  (`wrangler.jsonc` + `worker.js`) — see "Cloudflare / tools-dashboard deploy" below.
 - `npm install` then `npm run dev` (local) / `npm run build` (prod, outputs `dist/`).
 - Two entry points: `index.html` (editor) and `view.html` (read-only viewer). See `vite.config.js`.
-- **COOP/COEP headers** are set in `vercel.json` and the dev server (required so
-  `crossOriginIsolated` is true for ffmpeg.wasm) — on every page EXCEPT `google-connect.html`.
-  They break any cross-origin popup's link back to the page (Google sign-in); see Google Sheet export.
+- **COOP/COEP headers** are set in `vercel.json` and `worker.js` (Cloudflare) and the dev
+  server (required so `crossOriginIsolated` is true for ffmpeg.wasm) — on every page
+  EXCEPT `google-connect.html`. They break any cross-origin popup's link back to the
+  page (Google sign-in); see Google Sheet export.
 - Deps are intentionally minimal: `@ffmpeg/ffmpeg@0.12.10`, `@ffmpeg/util@0.12.1`,
   `jszip`. **Do not bump the ffmpeg versions** (see mp4 note below).
+
+## Cloudflare / tools-dashboard deploy
+This app is also served from inside Hornet's internal tools dashboard
+(`hornet-animation/tools-dashboard`), which owns `tools.hellohornet.com` and
+proxies `/mushy-edit/*` to this repo's own Cloudflare Worker (service binding
+`MUSHY_EDIT` → Worker `hornet-mushy-edit`) after its own Google-SSO gate. That
+gateway is what turns this into the "sign in with a Hornet account, no local
+setup" tool the Google Sheets export was built for.
+- **`vite.config.js`'s `base`** is `/mushy-edit/` for `vite build` (the dev
+  server stays at `/`) — Vite bakes that prefix into every built HTML's
+  asset URLs, or the browser would request `/assets/...` from site root and
+  miss the dashboard's proxy route entirely.
+- **`worker.js`** strips the `/mushy-edit` prefix and forwards to the
+  `ASSETS` binding (same pattern as `hornet-slide-media-extractor`'s
+  worker.js), redirects a bare `/mushy-edit` to add the trailing slash, and
+  re-applies the COOP/COEP isolation headers to everything except
+  `google-connect.html`.
+- **Any code that opens a page by its own absolute URL breaks under this
+  prefix** — `window.open`/`iframe.src`/etc. must use a *relative* path
+  (resolved against wherever the current page is mounted), never a
+  site-root `/foo.html`. `openConnect()` in `googleSheets.js` and
+  `openSplitModal()` in `main.js` are the two existing examples; a new one
+  needs the same treatment, or it'll open `tools.hellohornet.com/foo.html`
+  instead of `tools.hellohornet.com/mushy-edit/foo.html`.
+- **Deploying:** push to `main` runs `.github/workflows/deploy-cloudflare.yml`
+  (needs `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` repo secrets, set via
+  `wrangler secret put` or the GitHub UI — not yet set as of this writing).
+  A `preview` branch deploys to `hornet-mushy-edit-preview` the same way
+  `hornet-slide-media-extractor` does.
+- **Wiring on the tools-dashboard side** (that repo, not this one):
+  `worker/lib/db.js`'s `SEED_TOOLS`/`SEED_ROLE_DEFAULTS`, `worker.js`'s
+  `routes` array, and `wrangler.jsonc`'s `services` (top-level + `env.preview`)
+  all need a `mushy-edit` entry — see that repo's own `docs/branding.md`
+  before picking an icon/color, its adjacency rule is easy to violate by
+  accident.
 
 ## Sandbox build caveat (matters for you)
 The original author edits in an environment where `/mnt/user-data/outputs` can't be
