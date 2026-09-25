@@ -46,6 +46,12 @@ function loadGis() {
   });
   return gisReady;
 }
+// Fire this at module load (page load), not lazily on first click — loading
+// the GIS script is itself an async gap between "the click happened" and
+// "requestAccessToken() actually runs," and browsers can silently drop a
+// popup triggered too long after the last real user gesture. Preloading here
+// means that gap is gone by the time anyone clicks a direct-export button.
+loadGis().catch(() => {});
 
 let tokenClient = null, cachedToken = null, tokenExpiry = 0;
 async function getAccessToken() {
@@ -71,6 +77,14 @@ async function getAccessToken() {
     tokenClient.requestAccessToken({ prompt: cachedToken ? '' : 'consent' });
   });
 }
+
+// Starts the sign-in/token request without waiting for it — call this as the
+// very first thing in a click handler (before any slow data-building work)
+// so requestAccessToken() fires as close to the real click as possible, then
+// await the returned promise later once the slow work is done. callScript()
+// below calls getAccessToken() again itself, but that just returns the same
+// in-flight/cached promise/token — it won't trigger a second popup.
+export function beginSignIn() { return getAccessToken(); }
 
 async function callScript(fn, params) {
   const token = await getAccessToken();

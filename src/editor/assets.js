@@ -5,7 +5,7 @@ import {
 } from '../core/model.js';
 import { mutate } from '../core/history.js';
 import { createAnnotator, annotatorToolbar, drawAnnos } from '../core/annotate.js';
-import { apiBuild, apiSyncSheetState, apiUpdateComposite, DEFAULT_SPREADSHEET_ID } from '../io/sheetsApi.js';
+import { apiBuild, apiSyncSheetState, apiUpdateComposite, beginSignIn, DEFAULT_SPREADSHEET_ID } from '../io/sheetsApi.js';
 
 let refresh = () => {};
 export function setRefresh(fn) { refresh = fn; }
@@ -180,7 +180,14 @@ function resolveSpreadsheetId() {
 
 export async function sendBuildDirect() {
   const spreadsheetId = resolveSpreadsheetId();
+  // Fire the sign-in popup request immediately, before the slow (canvas-heavy)
+  // composite build — browsers can silently drop a popup triggered too long
+  // after the click, so this has to start as close to the click as possible.
+  // apiBuild() below calls getAccessToken() again, but only after signInPromise
+  // is awaited, so it just reuses the now-cached token — no second popup.
+  const signInPromise = beginSignIn();
   const data = await buildBreakdownDataComposite();
+  await signInPromise;
   const res = await apiBuild(spreadsheetId, data);
   if (res && res.sheetName) mutate(() => { P.sheetsBreakdownTabName = res.sheetName; });
   return res;

@@ -167,6 +167,15 @@ just `npm install && npm run build` in place. Always run a build before committi
     sub-region out of an already-inserted image. A removed row's picture goes blank instead. Notes,
     stage values, and everything else about the flag-removed/preserve-notes/append-new behavior
     carries over exactly.
+  - **Popup timing matters.** `requestAccessToken()` has to fire close to the real click — browsers
+    can silently drop the sign-in popup if it's triggered too long after the last user gesture, which
+    made this intermittently hang with zero error on first use (loading the GIS script fresh, then
+    building the composite, both *before* ever requesting a token, was enough delay to trigger it).
+    Fixed two ways: `sheetsApi.js` preloads the GIS script at module load instead of lazily on first
+    use, and `beginSignIn()` lets a caller fire `requestAccessToken()` immediately on click, awaited
+    only after other slow work finishes (see `sendBuildDirect` in `assets.js`) — `apiBuild`'s own
+    `getAccessToken()` call afterward just reuses the now-cached token, not a second popup. Keep this
+    ordering for any new direct-export entry point: kick off `beginSignIn()` before anything slow.
   - **Unverified against a real deployment**: the `scripts.run` request/response shape follows
     Google's documented contract, but exact OAuth scopes needed and the error shape when the called
     script throws haven't been tested live — see the comment at the top of `sheetsApi.js`.
