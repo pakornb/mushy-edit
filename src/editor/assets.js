@@ -142,7 +142,12 @@ export async function updateGoogleSheet(connect, onStatus) {
   return { ...res, seconds: (performance.now() - t0) / 1000 };
 }
 
-export function showSheetResult(res) {
+// autoOpen: true for a freshly created Sheet, since the user has no other
+// reference to it yet (unlike "use current"/"choose", where they already
+// know — or just picked — which Sheet it is). The manual link stays either
+// way, since a popup blocker can silently drop the automatic window.open.
+export function showSheetResult(res, { autoOpen = false } = {}) {
+  if (autoOpen) window.open(res.url, '_blank', 'noopener');
   modal('Google Sheet ready', (body) => {
     const p = el('p', '');
     p.textContent = res.updated != null

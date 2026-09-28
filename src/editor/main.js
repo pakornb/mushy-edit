@@ -491,9 +491,9 @@ function wire() {
   $('exportBtn').onclick = (e) => { e.stopPropagation(); $('exportMenu').classList.toggle('hidden'); };
   document.addEventListener('click', (e) => { if (!e.target.closest('#exportBtn, #exportMenu')) $('exportMenu').classList.add('hidden'); });
   $('mPreview').onclick = () => { $('exportMenu').classList.add('hidden'); openPreview(); };
-  const runSheets = async (task) => {
+  const runSheets = async (task, resultOpts) => {
     let res;
-    try { res = await task(overlay); overlay(false); showSheetResult(res); }
+    try { res = await task(overlay); overlay(false); showSheetResult(res, resultOpts); }
     catch (e) { overlay(false); console.error(e); if (e.message !== 'Cancelled.') toast(e.message || 'Google Sheets export failed'); return; }
     // The Sheet is already usable with linked pictures; embedding finishes on its own.
     const emb = await res.embedding;
@@ -514,7 +514,7 @@ function wire() {
       // this same click (chooseSheetDestination guarantees that) — anything
       // awaited first and the browser blocks the popup.
       onPick: () => runSheets((status) => exportToGoogleSheet(openConnect({ mode: 'pick' }), status)),
-      onChoice: (choice) => runSheets((status) => exportToGoogleSheet(withToken(choice), status)),
+      onChoice: (choice) => runSheets((status) => exportToGoogleSheet(withToken(choice), status), { autoOpen: !!choice.create }),
     });
   };
   $('mSheetUpdate').onclick = () => {
