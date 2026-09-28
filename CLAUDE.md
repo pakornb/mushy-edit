@@ -20,7 +20,12 @@ When in doubt, keep the tool on the timing/review/handoff side of that line.
 - **COOP/COEP headers** are set in `vercel.json` and `worker.js` (Cloudflare) and the dev
   server (required so `crossOriginIsolated` is true for ffmpeg.wasm) — on every page
   EXCEPT `google-connect.html`. They break any cross-origin popup's link back to the
-  page (Google sign-in); see Google Sheet export.
+  page (Google sign-in); see Google Sheet export. **Cloudflare Worker gotcha:**
+  `wrangler.jsonc`'s `html_handling: "auto-trailing-slash"` actually renders
+  `google-connect.html`'s content at the extension-less `/google-connect`, not the
+  `.html` path — the isolation-header exemption in `worker.js` has to match both
+  spellings, or the rendered page silently gets the headers anyway (broke sign-in
+  on 2026-09-28: "Sign-in was closed or blocked (popup_closed)").
 - Deps are intentionally minimal: `@ffmpeg/ffmpeg@0.12.10`, `@ffmpeg/util@0.12.1`,
   `jszip`. **Do not bump the ffmpeg versions** (see mp4 note below).
 
@@ -81,7 +86,7 @@ just `npm install && npm run build` in place. Always run a build before committi
 - `src/editor/inspector.js` — the right-hand property panel (filmstrip + selected-board
   actions + Shot/Tasks/Notes sections).
 - `src/editor/transport.js` — rAF playback clock, audio sync with frame-accurate slip.
-- `src/editor/assets.js` — asset tracker window, HTML **sheet preview**, breakdown JSON
+- `src/editor/assets.js` — asset tracker window, HTML **sheet preview**, Google Sheet
   export, montage builder. `buildBreakdownData()` is async (composites asset thumbs).
 - `src/io/workfile.js` — the **work file** (`<base>_work.animatic.json`): embeds full-res
   boards + audio + ALL state; reopenable source of truth. `base64.js` helpers.
@@ -90,7 +95,6 @@ just `npm install && npm run build` in place. Always run a build before committi
 - `src/io/viewer.js` — builds/export the viewer JSON (thumbnails + timing + annos + audio).
 - `src/viewer/main.js` + `view.html` — the read-only review player (loads a viewer JSON;
   `?src=<url>` also works).
-- `src/io/appsScript.js` — **generated** string of the Google Apps Script; see note.
 - `src/io/googleSheets.js` — Google Sheets export: sign-in handoff, Drive thumbnail uploads, one-batch
   Sheet writes, background embed; `public/google-connect.html` is its sign-in/Picker helper window;
   `apps-script/embed/` is the centrally deployed embed script. See note below.
@@ -143,27 +147,7 @@ just `npm install && npm run build` in place. Always run a build before committi
   offset (`-itsoffset` for +, `-ss` for −), capped with `-t total`.
 
 ## Google Sheet export
-- Editor builds breakdown JSON (`assets.js`), the `.gs` (`sequence_breakdown_to_sheets.gs` in the
-  repo root of the *outputs*, kept in sync) builds a **Shots** sheet + an **Assets** sheet (own tab,
-  Reference thumbnails at 320px). `src/io/appsScript.js` is a **generated** JSON-encoded copy of the
-  `.gs` for the in-app "Copy Apps Script" button — **regenerate it whenever the `.gs` changes**:
-  `node -e 'const fs=require("fs");fs.writeFileSync("src/io/appsScript.js","export const APPS_SCRIPT = "+JSON.stringify(fs.readFileSync("../sequence_breakdown_to_sheets.gs","utf8"))+";\n")'`
-  (adjust the `.gs` path to wherever it lives in the repo).
-- **Composite-strip export (experimental, "Download breakdown JSON (fast, experimental)")**: the
-  normal export embeds one thumbnail per shot/asset, and the `.gs` does one `insertImage()` per
-  row — the dominant cost of building a sheet, since each is its own network round trip and there's
-  no batch image-insert call in the Sheets API. The composite path (`buildBreakdownDataComposite`
-  in `assets.js`, `imageMode:"composite"` in the JSON) instead stacks every row's picture into one
-  tall canvas per column client-side (mirrors `shotMontage`'s per-shot compositing, just one level
-  up) and ships that plus a `rowH[]` per-row height array. The `.gs`'s `buildShotListComposite` /
-  `buildAssetSheetComposite` then do exactly **one** `insertImage()` per column, using `rowH`
-  directly for `setRowHeight` so there's a single source of truth for the aspect math. Scoped to
-  **"Build new sheet" only** — `updateFromJsonText` throws for composite JSON, since patching one
-  changed row would mean re-inserting the whole strip; the per-row path stays the default and is
-  what "Update active sheet" always uses. `STRIP_MONTAGE_W`/`STRIP_REF_W`/`STRIP_PAD` in `assets.js`
-  must match `MONTAGE_W`/`PAD` in the `.gs` (kept as plain numeric literals in both, not shared —
-  check both when changing thumbnail sizing).
-- **Google Sheets export ("Export to Google Sheet…" / "Update Google Sheet") — the main path.**
+- **Google Sheets export ("Export to Google Sheet…" / "Update Google Sheet") — the only path.**
   No per-user Apps Script setup. `src/io/googleSheets.js` + `public/google-connect.html`. The user
   signs in, picks any Sheet in their Drive with Google's Picker (or creates one), and the breakdown
   is added as a new tab. Two stages:
@@ -215,9 +199,12 @@ just `npm install && npm run build` in place. Always run a build before committi
   - **`=IMAGE()` URL form:** `https://lh3.googleusercontent.com/d/<fileId>` (`imageUrl()`). Google
     has broken other Drive direct-link forms before (`uc?export=view`); if thumbnails ever go
     blank, that's the first thing to check.
-- **Legacy Apps Script path** (Download breakdown JSON → paste `.gs` → Sheet menu import) still
-  exists for now, including the composite-strip JSON. The Apps Script Execution API ("direct")
-  experiment was removed — it needed per-Sheet script setup and hit the COOP popup problem above.
+- **Removed (2026-09-28):** the legacy Apps Script path (Download breakdown JSON → paste `.gs` →
+  Sheet menu import, including the composite-strip JSON variant) and the "Copy Apps Script" button
+  — both were stand-ins for direct Sheets export before it existed. `src/io/appsScript.js`,
+  `exportBreakdownJSON`/`exportBreakdownCompositeJSON`/`buildBreakdownDataComposite`/`buildStrip`
+  in `assets.js`, and the three corresponding Export-menu buttons are gone. `buildBreakdownData()`
+  (the non-composite one) stays — the direct export still uses it.
 
 ## Roadmap / next tasks
 1. **Batch B — insert board + update-images-preserve-timing:**

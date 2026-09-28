@@ -12,8 +12,7 @@ import { loadAudioFile, drawWaveform } from '../io/audio.js';
 import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture } from '../core/history.js';
-import { APPS_SCRIPT } from '../io/appsScript.js';
-import { openAssetWindow, openPreview, exportBreakdownJSON, exportBreakdownCompositeJSON, exportToGoogleSheet, updateGoogleSheet, showSheetResult, setRefresh, closeModal } from './assets.js';
+import { openAssetWindow, openPreview, exportToGoogleSheet, updateGoogleSheet, showSheetResult, setRefresh, closeModal } from './assets.js';
 import { openConnect, hasToken } from '../io/googleSheets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
@@ -488,20 +487,10 @@ function wire() {
   $('falloffCurve').onchange = (e) => { P.falloffCurve = e.target.value; drawCurvePreview(); };
   $('clearSelBtn').onclick = clearSelection;
   setRefresh(render);
-  const copyGs = async () => {
-    try { await navigator.clipboard.writeText(APPS_SCRIPT); toast('Apps Script copied — paste into Sheets → Extensions → Apps Script'); }
-    catch { const ta = document.createElement('textarea'); ta.value = APPS_SCRIPT; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Apps Script copied'); }
-  };
   $('assetsBtn').onclick = () => openAssetWindow();
   $('exportBtn').onclick = (e) => { e.stopPropagation(); $('exportMenu').classList.toggle('hidden'); };
   document.addEventListener('click', (e) => { if (!e.target.closest('#exportBtn, #exportMenu')) $('exportMenu').classList.add('hidden'); });
   $('mPreview').onclick = () => { $('exportMenu').classList.add('hidden'); openPreview(); };
-  $('mJson').onclick = () => { $('exportMenu').classList.add('hidden'); exportBreakdownJSON(); toast('Breakdown JSON downloaded'); };
-  $('mJsonComposite').onclick = async () => {
-    $('exportMenu').classList.add('hidden');
-    try { overlay('Building composite strip…'); await exportBreakdownCompositeJSON(); toast('Composite breakdown JSON downloaded'); }
-    catch (e) { console.error(e); toast('Composite export failed'); } finally { overlay(false); }
-  };
   // openConnect() opens a window, so it has to run synchronously inside the
   // click — anything awaited before it and the browser blocks the popup.
   const runSheets = async (task) => {
@@ -527,7 +516,6 @@ function wire() {
     const connect = hasToken() ? null : openConnect({ mode: 'signin' });
     runSheets((status) => updateGoogleSheet(connect, status));
   };
-  $('mCopyGs').onclick = () => { $('exportMenu').classList.add('hidden'); copyGs(); };
   $('annotateBtn').onclick = toggleAnnotate;
   $('mMp4').onclick = () => { $('exportMenu').classList.add('hidden'); runMp4(0); };
   $('mMp4Draft').onclick = () => { $('exportMenu').classList.add('hidden'); runMp4(960); };
