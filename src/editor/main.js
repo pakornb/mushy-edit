@@ -12,7 +12,7 @@ import { loadAudioFile, drawWaveform } from '../io/audio.js';
 import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture } from '../core/history.js';
-import { openAssetWindow, openPreview, exportToGoogleSheet, updateGoogleSheet, chooseSheetDestination, showSheetResult, setRefresh, closeModal } from './assets.js';
+import { openAssetWindow, openPreview, exportToGoogleSheet, updateGoogleSheet, chooseSheetDestination, showSheetResult, setRefresh, closeModal, modal } from './assets.js';
 import { openConnect, ensureToken } from '../io/googleSheets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
@@ -493,14 +493,45 @@ function wire() {
   $('mPreview').onclick = () => { $('exportMenu').classList.add('hidden'); openPreview(); };
   const runSheets = async (task, resultOpts) => {
     let res;
-    try { res = await task(overlay); overlay(false); showSheetResult(res, resultOpts); }
-    catch (e) { overlay(false); console.error(e); if (e.message !== 'Cancelled.') toast(e.message || 'Google Sheets export failed'); return; }
+    try { res = await task(overlay); }
+    catch (e) {
+      overlay(false);
+      console.error(e);
+      if (e.message === 'Cancelled.') return;
+      if (e.code === 'popup_blocked') { offerReconnect(() => runSheets(task, resultOpts)); return; }
+      toast(e.message || 'Google Sheets export failed');
+      return;
+    }
+    overlay(false);
+    showSheetResult(res, resultOpts);
     // The Sheet is already usable with linked pictures; embedding finishes on its own.
     const emb = await res.embedding;
     if (!emb || !emb.total) return;
     if (emb.error) toast('Pictures stay as Drive links (embedding failed: ' + emb.error + ')');
     else toast(`Pictures embedded in the Sheet (${emb.embedded}/${emb.total})`);
   };
+  // The token fetch that led here ran async (see ensureToken()'s file-header
+  // note), so by the time it found Google sign-in was needed, the click that
+  // started all this is long gone and window.open() gets blocked. This
+  // button click is a fresh one — openConnect() called synchronously inside
+  // it opens the window fine, and success just re-runs the original task,
+  // which now has a cached token and won't need a window at all.
+  function offerReconnect(retry) {
+    modal('Reconnect Google', (body) => {
+      const p = document.createElement('p');
+      p.textContent = 'Your browser blocked the Google sign-in window for this. Click below to open it directly.';
+      const b = document.createElement('button');
+      b.className = 'btn';
+      b.textContent = 'Connect Google';
+      b.onclick = () => {
+        openConnect({ mode: 'signin' }).then(
+          () => { closeModal(false); retry(); },
+          (err) => toast(err.message || 'Still couldn’t connect to Google'),
+        );
+      };
+      body.append(p, b);
+    }, false);
+  }
   // Attaches a token to an already-made choice (create/use-existing) —
   // ensureToken() only opens a window for the rare cases it can't avoid
   // one (see googleSheets.js), so this is usually a plain background fetch.

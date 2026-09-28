@@ -108,7 +108,15 @@ export function openConnect({ mode } = {}) {
   // being loaded with a trailing slash (see worker.js's redirect) so this
   // resolves against the right base.
   const w = window.open(`google-connect.html?${q}`, 'mushyGoogleConnect', 'width=480,height=560');
-  if (!w) return Promise.reject(new Error('Popup blocked — allow popups for this site and try again.'));
+  if (!w) {
+    // .code lets callers (main.js's runSheets) offer a one-click retry
+    // instead of a dead-end toast — a fresh, direct click on that retry
+    // button is its own real user gesture, so the window.open() it makes
+    // won't be blocked the way this one was.
+    const err = new Error('Popup blocked — allow popups for this site and try again.');
+    err.code = 'popup_blocked';
+    return Promise.reject(err);
+  }
   return new Promise((resolve, reject) => {
     const bc = new BroadcastChannel(CHANNEL);
     const finish = (fn, v) => { clearTimeout(timer); bc.close(); fn(v); };
