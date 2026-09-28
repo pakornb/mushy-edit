@@ -29,29 +29,33 @@
   below.
 -->
 <style>
-  :root { --bg:#14161a; --panel:#1c1f26; --line:#2e333d; --text:#e6e8ec; --dim:#8a929e; --accent:#ff8a3d; }
+  /* Matches src/style.css's brand tokens (hornet-animation/ui-toolkit) —
+     kept as a separate inline copy since this page is intentionally
+     dependency-free from the editor's own bundle. */
+  @font-face { font-family:'PP Neue Montreal'; src:url('/brand/fonts/PPNeueMontreal-Book.woff2') format('woff2'); font-weight:400; font-style:normal; font-display:swap; }
+  @font-face { font-family:'PP Neue Montreal'; src:url('/brand/fonts/PPNeueMontreal-Medium.woff2') format('woff2'); font-weight:500; font-style:normal; font-display:swap; }
+  :root { --bg:#000; --panel:#0d0d0d; --line:#2b2b2b; --text:#fff; --dim:rgba(255,255,255,.86); --accent:#00BBF4; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
-    font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; }
+    font-family:'PP Neue Montreal','Inter Tight',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; }
   .wrap { max-width:420px; margin:0 auto; padding:32px 24px; }
-  h1 { font:600 15px ui-monospace,'SF Mono',Menlo,Consolas,monospace; letter-spacing:.03em; text-transform:uppercase; margin:0 0 6px; }
-  h1 .dot { color:var(--accent); }
+  h1 { display:flex; align-items:center; gap:8px; font:600 15px inherit; letter-spacing:.03em; text-transform:uppercase; margin:0 0 6px; }
   p { color:var(--dim); font-size:13px; line-height:1.5; margin:0 0 20px; }
   button { display:block; width:100%; box-sizing:border-box; margin:0 0 10px; padding:11px 14px;
     border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--text);
     font:500 14px inherit; text-align:left; cursor:pointer; }
   button:hover { border-color:var(--accent); }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#1a1206; font-weight:600; text-align:center; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#000; font-weight:600; text-align:center; }
   button:disabled { opacity:.5; cursor:default; }
   .sub { display:block; color:var(--dim); font-size:12px; font-weight:400; margin-top:2px; }
-  .primary .sub { color:#3a2410; }
+  .primary .sub { color:#000; opacity:.75; }
   #status { color:var(--dim); font-size:12px; min-height:16px; margin-top:8px; }
-  #status.err { color:#ff8a8a; }
+  #status.err { color:#FF4351; }
   .hidden { display:none; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1><span class="dot">▍</span> Google Sheets</h1>
+  <h1><img src="/brand/logos/hornet-logo-white.svg" alt="" width="12" height="19" /> Google Sheets</h1>
 
   <div id="connecting">
     <p>Connecting to your Hornet account…</p>

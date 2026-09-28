@@ -29,6 +29,49 @@ When in doubt, keep the tool on the timing/review/handoff side of that line.
 - Deps are intentionally minimal: `@ffmpeg/ffmpeg@0.12.10`, `@ffmpeg/util@0.12.1`,
   `jszip`. **Do not bump the ffmpeg versions** (see mp4 note below).
 
+## Branding (2026-09-28)
+Pulled from `hornet-animation/ui-toolkit` (`guidelines.md` is the full reference —
+read it before touching colors/type/logo here). All of `src/style.css`'s `:root`
+tokens, plus `google-connect.html`'s own separate inline copy, now resolve to the
+brand's 8-color palette and PP Neue Montreal (fonts/logo copied into
+`public/brand/`, same layout as tools-dashboard's own `public/brand/`).
+- **`--mono` is no longer a monospace stack** — it's set to the same PP Neue
+  Montreal value as `--sans`. Kept the variable *name* rather than rename every
+  `font-family:var(--mono)` call site (there are ~70) — the brand guide is one
+  typeface, no exception carved out for tabular/numeric UI (the timecode clock,
+  frame counters). If that turns out to hurt legibility for fast-changing digits,
+  revisit as a deliberate, separate decision — don't silently reintroduce a
+  monospace stack under the same variable name.
+- **`--cut` and `--head` share one value (Bright Sky `#00BBF4`)**, not the two
+  unrelated hues (orange/blue) this file used before. The brand palette only has
+  3 accents + Sand Dune; the guide's own suggested functional mapping (info/
+  primary → Sky, success → Jade, warning → Sand Dune, danger → Fuchsia) covers
+  exactly 4 roles, so the old 5th "primary CTA / cut-marker" hue got folded into
+  the primary/active role instead of introducing an off-palette color. The one
+  place this mattered functionally — `.slot.c0`/`.c1`'s two alternating shot-
+  stripe colors, previously the old head-blue/cut-orange — now use Sky and Jade
+  directly so the two bands stay visually distinct.
+- **`--danger` is new**, Hot Fuchsia, used only by `.btn.ghost.sm.danger` — the
+  one genuinely destructive-action button. Everything else that used to share
+  `--cut`'s orange (the "off"/disabled state, cut-tags, the primary button, the
+  play button) stays on the primary accent, per the guide's rule that the danger
+  color must never be reused elsewhere or it stops reading as a reliable signal.
+- **Text opacity follows the guide's tiers exactly**: `--text` white 100%,
+  `--muted` white 86% (captions/metadata), `--faint` white 72%. There is
+  deliberately no third, dimmer tier — the guide calls out 60% as already
+  reading like flat gray on black even though it's technically white+alpha.
+  Panel surfaces (`--panel`/`--panel2`) are near-black, not a separate off-
+  palette gray, for the same reason.
+- **Logo**: `public/brand/logos/hornet-logo-white.svg` (logomark only — the kit
+  ships no horizontal wordmark lockup) in the header next to "Mushy Edit", both
+  in `index.html` and `view.html`, plus `google-connect.html`'s own header.
+  Favicon is `public/logo.png` (same file tools-dashboard uses for its own).
+- **Not rebranded**: `public/frame-splitter.html`. It's a separate, much larger,
+  self-contained tool with its own established multi-scheme design system (dark/
+  amber/cyan) — its own comment says it deliberately matches "the house style of
+  your other browser tools," not this repo's brand pass. Revisit as its own task
+  if it should follow the Hornet brand kit too.
+
 ## Cloudflare / tools-dashboard deploy
 This app is also served from inside Hornet's internal tools dashboard
 (`hornet-animation/tools-dashboard`), which owns `tools.hellohornet.com` and
