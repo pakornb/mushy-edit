@@ -16,6 +16,17 @@ const BASE = '/mushy-edit'
 // through this Worker gets them EXCEPT google-connect.html, whose whole job
 // is to run without cross-origin isolation so Google's sign-in popup and
 // Picker iframe still work — see src/io/googleSheets.js.
+//
+// Both spellings matter: wrangler.jsonc's `html_handling: "auto-trailing-
+// slash"` serves /google-connect.html's actual content at the extension-
+// less /google-connect (redirecting the .html request there), so the
+// exemption has to match what ASSETS actually renders content at, not just
+// what the app's own JS requests. Missing the extension-less form here was
+// a real outage: the isolation headers landed on the rendered page anyway,
+// cutting the same window.opener link this page exists to preserve, and
+// Google's popup silently reported "closed" instead of completing.
+const ISOLATION_EXEMPT_PATHS = new Set(['/google-connect.html', '/google-connect'])
+
 function withIsolation(response) {
   const headers = new Headers(response.headers)
   headers.set('Cross-Origin-Opener-Policy', 'same-origin')
@@ -50,7 +61,7 @@ export default {
       response = new Response(response.body, { status: response.status, statusText: response.statusText, headers })
     }
 
-    if (assetUrl.pathname === '/google-connect.html') return response
+    if (ISOLATION_EXEMPT_PATHS.has(assetUrl.pathname)) return response
     return withIsolation(response)
   },
 }
