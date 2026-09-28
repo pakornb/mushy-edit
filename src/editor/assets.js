@@ -71,11 +71,13 @@ export async function buildBreakdownData(withThumbs = true) {
 
 // ---------- Google Sheets export ----------
 // Build a new breakdown tab in a Sheet the user picks (or creates) in their
-// own Drive, or update the tab this project exported to last time. The
-// connect promise comes from openConnect(), which main.js has to call
-// synchronously inside the click so its helper window isn't popup-blocked.
-// Which Sheet/tab a project exported to is saved in the work file
-// (project.sheetsSpreadsheetId / sheetsSpreadsheetName / sheetsTabId).
+// own Drive, or update the tab this project exported to last time. `connect`
+// resolves to { token, expiresIn, spreadsheetId?/spreadsheetName?/create? } —
+// from googleSheets.js's ensureToken() (no window, the common case) merged
+// with chooseSheetDestination()'s inline choice, or from openConnect() when
+// Picker is actually needed (see that file's header note). Which Sheet/tab
+// a project exported to is saved in the work file (project.sheetsSpreadsheetId
+// / sheetsSpreadsheetName / sheetsTabId).
 export async function exportToGoogleSheet(connect, onStatus) {
   onStatus('Waiting for Google…');
   const choice = await connect;
@@ -91,6 +93,42 @@ export async function exportToGoogleSheet(connect, onStatus) {
   P.sheetsSpreadsheetName = choice.create ? `${P.baseName} breakdown` : (choice.spreadsheetName || '');
   P.sheetsTabId = res.sheetId;
   return { ...res, seconds: (performance.now() - t0) / 1000 };
+}
+
+/**
+ * Where should the breakdown go? Inline modal, no popup window — unlike the
+ * old design, "Use current"/"Create new" here never need Google's own UI at
+ * all, only "Choose a Google Sheet…" does (Picker still needs a window; see
+ * public/google-connect.html and googleSheets.js's header note for why).
+ *
+ * Takes callbacks rather than returning a Promise so onPick can call
+ * openConnect() (window.open) synchronously inside its own button's click —
+ * going through an intermediate Promise/await first, even just one
+ * microtask's worth, risks the browser treating the eventual window.open()
+ * as no longer tied to a real user gesture and blocking it (see
+ * googleSheets.js's file header — this bit the original design more than
+ * once). onChoice has no such constraint, since neither of its two choices
+ * opens a window.
+ */
+export function chooseSheetDestination(current, { onPick, onChoice }) {
+  modal('Export to Google Sheet', (body) => {
+    const p = el('p', '');
+    p.textContent = "Where should the breakdown go? It's added as a new tab, so nothing already in the Sheet is touched.";
+    body.appendChild(p);
+    if (current && current.id) {
+      const b = el('button', 'btn ghost choice-btn');
+      b.innerHTML = `Use “${escapeHtml(current.name || 'this project’s Sheet')}”<span class="sub">The Sheet this project exported to last time</span>`;
+      b.onclick = () => { closeModal(false); onChoice({ spreadsheetId: current.id, spreadsheetName: current.name || '' }); };
+      body.appendChild(b);
+    }
+    const pick = el('button', 'btn ghost choice-btn');
+    pick.innerHTML = 'Choose a Google Sheet…<span class="sub">Any spreadsheet in your Drive</span>';
+    pick.onclick = () => { closeModal(false); onPick(); };
+    const create = el('button', 'btn ghost choice-btn');
+    create.innerHTML = 'Create a new Google Sheet<span class="sub">Made in your Drive, named after this project</span>';
+    create.onclick = () => { closeModal(false); onChoice({ create: true }); };
+    body.append(pick, create);
+  }, false); // dismissing without choosing is a silent no-op, same as the asset window
 }
 
 export async function updateGoogleSheet(connect, onStatus) {

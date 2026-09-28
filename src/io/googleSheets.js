@@ -16,10 +16,22 @@
 //     deletes those Drive files, so no public links are left behind. If this
 //     stage fails, the links simply stay and the Sheet still works.
 //
-// Sign-in happens in a separate helper window (public/google-connect.html)
-// because the editor's Cross-Origin-Opener-Policy header (needed by
-// ffmpeg.wasm) cuts the link to Google's sign-in popup. openConnect() must be
-// called synchronously inside a click handler so window.open isn't blocked.
+// Sign-in, when this app is served through tools-dashboard (2026-09-28): no
+// window at all in the common case. ensureToken() reuses the Hornet
+// dashboard's own session via a same-origin fetch — see tools-dashboard's
+// auth.js — so once a user has granted Sheets access once, ever, every
+// later export/update just gets a token silently. A window only still
+// opens for two genuinely unavoidable cases: choosing a specific Sheet
+// (Google's Picker is an iframe COEP blocks from running inside this
+// isolated page — see below) and the one-time-ever consent screen (or,
+// outside tools-dashboard — the standalone Vercel deploy, local dev — every
+// time, via the original per-tab flow).
+//
+// Why a window at all for those: the editor's Cross-Origin-Opener-Policy
+// header (needed by ffmpeg.wasm) cuts the link to any cross-origin popup,
+// and COEP blocks the Picker iframe outright — public/google-connect.html
+// is served without either. openConnect() must be called synchronously
+// inside a click handler so window.open isn't blocked.
 //
 // Scopes: drive.file (Sheets the user picks/creates here and files this app
 // uploads) plus spreadsheets, which the embed script needs to open the Sheet.
@@ -50,15 +62,46 @@ let token = null, tokenExp = 0;
 export function hasToken() { return !!token && Date.now() < tokenExp - 60000; }
 
 /**
- * Opens the helper window and resolves with what the user chose:
- * { spreadsheetId, spreadsheetName } for an existing Sheet, { create: true }
- * for a new one, or just a token when mode is 'signin'. Rejects with
- * message 'Cancelled.' if the window is closed without choosing.
+ * Gets a usable access token with no popup window whenever possible.
+ * Resolves { token, expiresIn }. Never opens a window for an already-cached
+ * token or a successful silent SSO fetch — only falls through to
+ * openConnect({mode:'signin'}) for the two cases that genuinely need a
+ * window (see the file header note): the one-time-ever consent screen, or
+ * this app not being reachable through tools-dashboard at all.
  */
-export function openConnect({ mode = 'choose', current = null } = {}) {
+export async function ensureToken() {
+  if (hasToken()) return { token, expiresIn: Math.round((tokenExp - Date.now()) / 1000) };
+  let r;
+  try { r = await fetch('/api/auth/google/mushy-sheets-token', { credentials: 'include' }); }
+  catch { r = null; }
+  if (r && r.status === 401) {
+    window.location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+    return new Promise(() => {}); // navigating away
+  }
+  if (r && r.ok) {
+    const data = await r.json();
+    token = data.accessToken;
+    tokenExp = Date.now() + (data.expiresIn || 3600) * 1000;
+    return { token, expiresIn: data.expiresIn };
+  }
+  // 409 (no refresh token yet) or unreachable (not behind tools-dashboard) —
+  // google-connect.html's own signin-mode logic already handles both: the
+  // one-time consent redirect, or the manual per-tab Google sign-in button.
+  const result = await openConnect({ mode: 'signin' });
+  return { token: result.token, expiresIn: result.expiresIn };
+}
+
+/**
+ * Opens the helper window. mode:'pick' resolves { token, expiresIn,
+ * spreadsheetId, spreadsheetName } once the user picks a Sheet via Picker;
+ * mode:'signin' resolves just { token, expiresIn } with no Picker UI at
+ * all — used by ensureToken()'s fallback, not called directly elsewhere.
+ * Rejects with message 'Cancelled.' if the window is closed without
+ * finishing (Picker cancelled, or the window closed outright).
+ */
+export function openConnect({ mode } = {}) {
   const rid = Math.random().toString(36).slice(2);
   const q = new URLSearchParams({ rid, mode, client: CLIENT_ID, key: PICKER_API_KEY, app: APP_ID });
-  if (current && current.id) { q.set('cur', current.id); if (current.name) q.set('curName', current.name); }
   // Relative, not `/google-connect.html`: in production this app is served
   // under a path prefix (tools.hellohornet.com/mushy-edit/), and a
   // site-root path would miss that prefix. Relies on the page itself always

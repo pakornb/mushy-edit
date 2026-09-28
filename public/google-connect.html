@@ -27,6 +27,16 @@
   standalone Vercel deploy, or local dev, neither behind tools-dashboard's
   gate) does this fall back to the original per-tab Google sign-in button
   below.
+
+  Two modes only (?mode= in the URL): 'signin' just gets a token and hands
+  it back — used for Update and, indirectly, for Export's "use current
+  Sheet"/"create new" choices, both of which resolve inline in the editor's
+  own UI now (assets.js's chooseSheetDestination) and never need this
+  window at all. 'pick' is what actually still needs a window: it gets a
+  token the same way, then goes straight into Google's Picker with no
+  intermediate button — the one thing that has to happen here rather than
+  inline, since Picker's iframe is exactly what COEP blocks on the editor's
+  own isolated page.
 -->
 <style>
   /* Matches src/style.css's brand tokens (hornet-animation/ui-toolkit) —
@@ -58,19 +68,12 @@
   <h1><img src="/brand/logos/hornet-logo-white.svg" alt="" width="12" height="19" /> Google Sheets</h1>
 
   <div id="connecting">
-    <p>Connecting to your Hornet account…</p>
+    <p id="connectingMsg">Connecting to your Hornet account…</p>
   </div>
 
   <div id="signin" class="hidden">
     <p>Sign in with the Google account that should own the breakdown. Mushy Edit writes the breakdown into the Sheet you pick or create here, and stores the pictures inside that Sheet.</p>
     <button class="primary" id="signinBtn">Continue with Google</button>
-  </div>
-
-  <div id="choose" class="hidden">
-    <p>Where should the breakdown go? It's added as a new tab, so nothing already in the Sheet is touched.</p>
-    <button id="useCurrent" class="hidden"></button>
-    <button id="pickBtn">Choose a Google Sheet…<span class="sub">Any spreadsheet in your Drive</span></button>
-    <button id="createBtn">Create a new Google Sheet<span class="sub">Made in your Drive, named after this project</span></button>
   </div>
 
   <div id="status"></div>
@@ -81,12 +84,10 @@
   'use strict';
   var q = new URLSearchParams(location.search);
   var rid = q.get('rid');
-  var mode = q.get('mode') || 'choose';
+  var mode = q.get('mode') || 'pick'; // 'signin' | 'pick' — see the header note
   var clientId = q.get('client');
   var apiKey = q.get('key');
   var appId = q.get('app');
-  var cur = q.get('cur');
-  var curName = q.get('curName');
   // Set on the way back from a failed/denied mushy-sheets-connect (see
   // tools-dashboard's auth.js) — retrying the silent path here would just
   // 409 again and redirect straight back into the same failed consent flow,
@@ -118,6 +119,7 @@
 
   var statusEl = document.getElementById('status');
   function status(msg, isErr) { statusEl.textContent = msg || ''; statusEl.className = isErr ? 'err' : ''; }
+  var connectingMsg = document.getElementById('connectingMsg');
 
   function loadScript(src) {
     return new Promise(function (res, rej) {
@@ -127,13 +129,27 @@
     });
   }
   var gisReady = loadScript('https://accounts.google.com/gsi/client');
-  var pickerReady = loadScript('https://apis.google.com/js/api.js').then(function () {
+  // Only 'pick' ever needs Picker — no point loading it for a plain signin.
+  var pickerReady = mode === 'pick' ? loadScript('https://apis.google.com/js/api.js').then(function () {
     return new Promise(function (res) { gapi.load('picker', res); });
-  });
+  }) : null;
 
   var signinBtn = document.getElementById('signinBtn');
   signinBtn.disabled = true;
   gisReady.then(function () { signinBtn.disabled = false; }, function (e) { status(e.message, true); });
+
+  // Common continuation for both the silent SSO path and the manual button
+  // below — 'signin' just hands the token straight back; 'pick' goes
+  // straight into Picker with no extra click.
+  function onToken(t, exp) {
+    token = t;
+    expiresIn = exp || 3600;
+    if (mode === 'signin') { send({ type: 'result', token: token, expiresIn: expiresIn }); return; }
+    document.getElementById('signin').classList.add('hidden');
+    document.getElementById('connecting').classList.remove('hidden');
+    if (connectingMsg) connectingMsg.textContent = 'Opening your Drive…';
+    openPicker();
+  }
 
   signinBtn.onclick = function () {
     var client = google.accounts.oauth2.initTokenClient({
@@ -141,10 +157,7 @@
       scope: SCOPE,
       callback: function (resp) {
         if (resp.error) { status('Sign-in failed: ' + resp.error, true); return; }
-        token = resp.access_token;
-        expiresIn = +resp.expires_in || 3600;
-        if (mode === 'signin') { send({ type: 'result', token: token, expiresIn: expiresIn }); return; }
-        showChoices();
+        onToken(resp.access_token, +resp.expires_in);
       },
       error_callback: function (err) { status('Sign-in was closed or blocked (' + (err && err.type || 'unknown') + ').', true); },
     });
@@ -152,8 +165,8 @@
   };
 
   // Silent path: reuse the Hornet dashboard session instead of Google's own
-  // popup. This page's own current URL (rid/mode/client/key/app/cur/curName
-  // all preserved) is passed as `next` to the one-time-consent redirect, so
+  // popup. This page's own current URL (rid/mode/client/key/app all
+  // preserved) is passed as `next` to the one-time-consent redirect, so
   // this exact page reloads with the same context once that's done and
   // retries — no coordination needed with the window that opened us.
   function trySso() {
@@ -167,14 +180,7 @@
         return true;
       }
       if (!r.ok) return false; // not behind tools-dashboard, or a transient error — fall back
-      return r.json().then(function (data) {
-        token = data.accessToken;
-        expiresIn = +data.expiresIn || 3600;
-        document.getElementById('connecting').classList.add('hidden');
-        if (mode === 'signin') { send({ type: 'result', token: token, expiresIn: expiresIn }); return true; }
-        showChoices();
-        return true;
-      });
+      return r.json().then(function (data) { onToken(data.accessToken, +data.expiresIn); return true; });
     }, function () { return false; }); // fetch itself failed (offline, etc.) — fall back
   }
 
@@ -188,26 +194,7 @@
     if (ssoFailed) status('Hornet-account sign-in was cancelled or failed — try again with your Google account directly.', true);
   });
 
-  function showChoices() {
-    document.getElementById('signin').classList.add('hidden');
-    document.getElementById('choose').classList.remove('hidden');
-    if (cur) {
-      var b = document.getElementById('useCurrent');
-      b.innerHTML = '';
-      b.appendChild(document.createTextNode('Use ' + (curName ? '“' + curName + '”' : 'this project’s Sheet')));
-      var sub = document.createElement('span'); sub.className = 'sub'; sub.textContent = 'The Sheet this project exported to last time';
-      b.appendChild(sub);
-      b.classList.remove('hidden');
-      b.onclick = function () { send({ type: 'result', token: token, expiresIn: expiresIn, spreadsheetId: cur, spreadsheetName: curName || '' }); };
-    }
-  }
-
-  document.getElementById('createBtn').onclick = function () {
-    send({ type: 'result', token: token, expiresIn: expiresIn, create: true });
-  };
-
-  document.getElementById('pickBtn').onclick = function () {
-    status('Opening your Drive…');
+  function openPicker() {
     pickerReady.then(function () {
       var view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
         .setMode(google.picker.DocsViewMode.LIST);
@@ -230,7 +217,7 @@
       picker.setVisible(true);
       status('');
     }, function (e) { status(e.message, true); });
-  };
+  }
 })();
 </script>
 </body>

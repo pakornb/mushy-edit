@@ -12,8 +12,8 @@ import { loadAudioFile, drawWaveform } from '../io/audio.js';
 import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture } from '../core/history.js';
-import { openAssetWindow, openPreview, exportToGoogleSheet, updateGoogleSheet, showSheetResult, setRefresh, closeModal } from './assets.js';
-import { openConnect, hasToken } from '../io/googleSheets.js';
+import { openAssetWindow, openPreview, exportToGoogleSheet, updateGoogleSheet, chooseSheetDestination, showSheetResult, setRefresh, closeModal } from './assets.js';
+import { openConnect, ensureToken } from '../io/googleSheets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
 
@@ -491,8 +491,6 @@ function wire() {
   $('exportBtn').onclick = (e) => { e.stopPropagation(); $('exportMenu').classList.toggle('hidden'); };
   document.addEventListener('click', (e) => { if (!e.target.closest('#exportBtn, #exportMenu')) $('exportMenu').classList.add('hidden'); });
   $('mPreview').onclick = () => { $('exportMenu').classList.add('hidden'); openPreview(); };
-  // openConnect() opens a window, so it has to run synchronously inside the
-  // click — anything awaited before it and the browser blocks the popup.
   const runSheets = async (task) => {
     let res;
     try { res = await task(overlay); overlay(false); showSheetResult(res); }
@@ -503,18 +501,26 @@ function wire() {
     if (emb.error) toast('Pictures stay as Drive links (embedding failed: ' + emb.error + ')');
     else toast(`Pictures embedded in the Sheet (${emb.embedded}/${emb.total})`);
   };
+  // Attaches a token to an already-made choice (create/use-existing) —
+  // ensureToken() only opens a window for the rare cases it can't avoid
+  // one (see googleSheets.js), so this is usually a plain background fetch.
+  const withToken = async (choice) => ({ ...(await ensureToken()), ...choice });
   $('mSheetExport').onclick = () => {
     $('exportMenu').classList.add('hidden');
     if (!P.shots.length) { toast('Load some boards first'); return; }
     const current = P.sheetsSpreadsheetId ? { id: P.sheetsSpreadsheetId, name: P.sheetsSpreadsheetName } : null;
-    const connect = openConnect({ mode: 'choose', current });
-    runSheets((status) => exportToGoogleSheet(connect, status));
+    chooseSheetDestination(current, {
+      // openConnect() opens a window, so it must run synchronously inside
+      // this same click (chooseSheetDestination guarantees that) — anything
+      // awaited first and the browser blocks the popup.
+      onPick: () => runSheets((status) => exportToGoogleSheet(openConnect({ mode: 'pick' }), status)),
+      onChoice: (choice) => runSheets((status) => exportToGoogleSheet(withToken(choice), status)),
+    });
   };
   $('mSheetUpdate').onclick = () => {
     $('exportMenu').classList.add('hidden');
     if (!P.sheetsSpreadsheetId || P.sheetsTabId == null) { toast('Use "Export to Google Sheet…" first'); return; }
-    const connect = hasToken() ? null : openConnect({ mode: 'signin' });
-    runSheets((status) => updateGoogleSheet(connect, status));
+    runSheets((status) => updateGoogleSheet(ensureToken(), status));
   };
   $('annotateBtn').onclick = toggleAnnotate;
   $('mMp4').onclick = () => { $('exportMenu').classList.add('hidden'); runMp4(0); };

@@ -216,33 +216,50 @@ just `npm install && npm run build` in place. Always run a build before committi
     the caller's token must carry every scope the script uses). `spreadsheets` is sensitive: fine
     for Hornet accounts; outside accounts see "unverified app" until the consent screen is verified.
     If a user unticks it at consent, stage 2 fails and links stay.
-  - **Why sign-in happens in a helper window:** the editor's `Cross-Origin-Opener-Policy:
+  - **No window at all in the common case (2026-09-28).** "Where should the breakdown go?" (Use
+    current Sheet / Choose a Sheet / Create new) is an **inline modal** in the editor itself
+    (`assets.js`'s `chooseSheetDestination`), not part of the helper window — because getting a
+    token is now usually just a background fetch (below), only "Choose a Google Sheet…" (Picker)
+    still needs a window at all; "Use current"/"Create new" never open one. `googleSheets.js`'s
+    `ensureToken()` is the entry point every caller should use to get a token — it returns the
+    cached one if still valid, then tries the silent fetch below, and only falls through to
+    `openConnect({mode:'signin'})` (a window) for the genuinely unavoidable cases. `openConnect()`
+    itself now takes only `mode: 'signin' | 'pick'` — `'signin'` hands back just a token (no Picker
+    UI), `'pick'` gets a token the same way then goes straight into Picker with no intermediate
+    button. **Popup-gesture timing matters even for the one window that remains:** `chooseSheetDestination`
+    takes callbacks rather than returning a Promise specifically so its "Choose a Google Sheet…"
+    button can call `openConnect()` (`window.open`) synchronously inside its own click — going
+    through even one microtask of `await` first (e.g. resolving a Promise from the modal, then
+    calling `openConnect` in the continuation) risks the browser no longer treating the eventual
+    `window.open()` as tied to a real user gesture and blocking it. This bit the original design
+    more than once; see the git history around 2026-09-25 through 2026-09-28 if it needs debugging.
+  - **Why the Picker window still needs to exist at all:** the editor's `Cross-Origin-Opener-Policy:
     same-origin` (ffmpeg.wasm needs it) severs the link to any cross-origin popup, so Google's
     sign-in popup could never return its token — it opened, you approved, it closed, nothing
-    happened, in every browser. COEP `require-corp` also blocks the Picker iframe.
+    happened, in every browser. COEP `require-corp` also blocks the Picker iframe outright, with no
+    workaround — this is the one piece that can't move inline regardless of the SSO work below.
     `google-connect.html` is served WITHOUT COOP/COEP (exempted in `vite.config.js`, `vercel.json`,
     and `worker.js` — **both the `.html` and extension-less spellings**, see the Cloudflare gotcha
     note near the top of this file) and reports back over `BroadcastChannel("mushy-google")`, which
-    same-origin windows share regardless of COOP. `openConnect()` must run synchronously inside the
-    click (it calls `window.open`) — await anything first and the popup is blocked.
-  - **Sign-in itself, when behind tools-dashboard (2026-09-28):** `google-connect.html` no longer
-    shows its own "Continue with Google" button first — on load it tries
-    `GET /api/auth/google/mushy-sheets-token` (tools-dashboard's `auth.js`, `credentials:'include'`)
-    to reuse the Hornet dashboard session silently. `200` → token in hand, straight to Picker/create
-    (or, for `mode:'signin'`, straight back to the opener) — no Google interaction at all. `409` →
-    no Google refresh token stored for this user yet → this window redirects itself to
+    same-origin windows share regardless of COOP.
+  - **Sign-in itself, when behind tools-dashboard:** `google-connect.html` shows no UI at all by
+    default — on load it tries `GET /api/auth/google/mushy-sheets-token` (tools-dashboard's
+    `auth.js`, `credentials:'include'`) to reuse the Hornet dashboard session silently. `200` →
+    token in hand, straight to Picker (`mode:'pick'`) or straight back to the opener
+    (`mode:'signin'`) — no Google interaction at all. `409` → no Google refresh token stored for
+    this user yet → this window redirects itself to
     `/api/auth/google/mushy-sheets-connect?next=<its own URL, params intact>`, which shows Google's
     consent screen **once, ever**, stores the refresh token server-side, and redirects back here to
     retry (now succeeding). `401` → not signed into Hornet at all → redirects to `/login`. Any other
     response (typically a 404, since the route simply doesn't exist there) → falls back to the
-    original per-tab Google popup below — this is what keeps the standalone Vercel deploy and local
-    dev working, since neither is behind tools-dashboard's session/cookie. A `pagehide` listener
-    treats an unexpected window close as "cancelled," so these *intentional* same-window redirects
-    set a `navigating` flag first (`redirectTo()`) — forgetting that turns every real consent flow
-    into a spurious "Cancelled." error. A failed/denied consent comes back as `?sheetsError=1`
-    (mirrors Slide Media Extractor's own `slidesError` convention) — checked before ever retrying
-    the silent path again, or a denied grant would redirect straight back into another doomed
-    consent attempt forever.
+    original per-tab "Continue with Google" button — this is what keeps the standalone Vercel
+    deploy and local dev working, since neither is behind tools-dashboard's session/cookie. A
+    `pagehide` listener treats an unexpected window close as "cancelled," so these *intentional*
+    same-window redirects set a `navigating` flag first (`redirectTo()`) — forgetting that turns
+    every real consent flow into a spurious "Cancelled." error. A failed/denied consent comes back
+    as `?sheetsError=1` (mirrors Slide Media Extractor's own `slidesError` convention) — checked
+    before ever retrying the silent path again, or a denied grant would redirect straight back into
+    another doomed consent attempt forever.
   - **Server side (tools-dashboard):** `worker/routes/auth.js`'s `INCREMENTAL_SCOPES.'mushy-sheets'`
     (`toolId: 'mushy-edit'`, scope `drive.file` + `spreadsheets`) — the exact same mechanism Slide
     Media Extractor's own incremental Slides scope already used, generalized to share one
