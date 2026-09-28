@@ -177,10 +177,38 @@ just `npm install && npm run build` in place. Always run a build before committi
     same-origin` (ffmpeg.wasm needs it) severs the link to any cross-origin popup, so Google's
     sign-in popup could never return its token — it opened, you approved, it closed, nothing
     happened, in every browser. COEP `require-corp` also blocks the Picker iframe.
-    `google-connect.html` is served WITHOUT COOP/COEP (exempted in `vite.config.js` and
-    `vercel.json`) and reports back over `BroadcastChannel("mushy-google")`, which same-origin
-    windows share regardless of COOP. `openConnect()` must run synchronously inside the click
-    (it calls `window.open`) — await anything first and the popup is blocked.
+    `google-connect.html` is served WITHOUT COOP/COEP (exempted in `vite.config.js`, `vercel.json`,
+    and `worker.js` — **both the `.html` and extension-less spellings**, see the Cloudflare gotcha
+    note near the top of this file) and reports back over `BroadcastChannel("mushy-google")`, which
+    same-origin windows share regardless of COOP. `openConnect()` must run synchronously inside the
+    click (it calls `window.open`) — await anything first and the popup is blocked.
+  - **Sign-in itself, when behind tools-dashboard (2026-09-28):** `google-connect.html` no longer
+    shows its own "Continue with Google" button first — on load it tries
+    `GET /api/auth/google/mushy-sheets-token` (tools-dashboard's `auth.js`, `credentials:'include'`)
+    to reuse the Hornet dashboard session silently. `200` → token in hand, straight to Picker/create
+    (or, for `mode:'signin'`, straight back to the opener) — no Google interaction at all. `409` →
+    no Google refresh token stored for this user yet → this window redirects itself to
+    `/api/auth/google/mushy-sheets-connect?next=<its own URL, params intact>`, which shows Google's
+    consent screen **once, ever**, stores the refresh token server-side, and redirects back here to
+    retry (now succeeding). `401` → not signed into Hornet at all → redirects to `/login`. Any other
+    response (typically a 404, since the route simply doesn't exist there) → falls back to the
+    original per-tab Google popup below — this is what keeps the standalone Vercel deploy and local
+    dev working, since neither is behind tools-dashboard's session/cookie. A `pagehide` listener
+    treats an unexpected window close as "cancelled," so these *intentional* same-window redirects
+    set a `navigating` flag first (`redirectTo()`) — forgetting that turns every real consent flow
+    into a spurious "Cancelled." error. A failed/denied consent comes back as `?sheetsError=1`
+    (mirrors Slide Media Extractor's own `slidesError` convention) — checked before ever retrying
+    the silent path again, or a denied grant would redirect straight back into another doomed
+    consent attempt forever.
+  - **Server side (tools-dashboard):** `worker/routes/auth.js`'s `INCREMENTAL_SCOPES.'mushy-sheets'`
+    (`toolId: 'mushy-edit'`, scope `drive.file` + `spreadsheets`) — the exact same mechanism Slide
+    Media Extractor's own incremental Slides scope already used, generalized to share one
+    implementation instead of two copies. Gated on the `mushy-edit` tool grant, same as the page
+    itself. The refresh token is stored per-user, one per user total (`google_refresh_token:<email>`
+    in tools-dashboard's `MATRIX` KV) — covers the union of every scope that user has ever granted
+    across *any* tool using this mechanism (`include_granted_scopes:true`), so granting Slides then
+    Mushy Sheets (or vice versa) never overwrites with a narrower grant. Never sent to the browser;
+    only ever exchanged for a short-lived access token server-side.
   - **Update** follows the original Apps Script "Update active sheet" rules: match by Name; matched
     rows get a fresh picture + Length only (Shot/Notes/stage values untouched); new shots appended;
     vanished shots flagged red with "[not in latest]" and **keep their last picture** (per-row
