@@ -193,15 +193,26 @@ just `npm install && npm run build` in place. Always run a build before committi
 - **Google Sheets export ("Export to Google Sheet…" / "Update Google Sheet") — the only path.**
   No per-user Apps Script setup. `src/io/googleSheets.js` + `public/google-connect.html`. The user
   signs in, picks any Sheet in their Drive with Google's Picker (or creates one), and the breakdown
-  is added as a new tab. Two stages:
+  is added as a new tab. The text/layout `batchUpdate` (headers, values, column widths, row heights
+  — all known locally, nothing Drive-dependent) runs first and the function returns as soon as it
+  lands, so the result modal and its Sheet link show up immediately, with empty picture cells.
+  Pictures then happen in two further stages, both **entirely in the background** (`images`/
+  `embedding` promises on the result — `main.js`'s `runSheets` awaits them after showing the link,
+  only to toast success/failure):
   1. **Fast links:** upload each row's thumbnail to a "Mushy Edit thumbnails" folder in the user's
-     Drive (parallel, `UPLOAD_CONCURRENCY`), share each "anyone with the link", then write the whole
-     tab in **one** `spreadsheets.batchUpdate` with `=IMAGE(url, 4, h, w)` formulas. The result
-     modal shows here — the Sheet is already complete.
+     Drive (parallel, `UPLOAD_CONCURRENCY`), then a second small `batchUpdate` drops `=IMAGE(url, 4,
+     h, w)` formulas into the picture cells. The folder is shared "anyone with the link" **once**
+     (`ensureFolderShared` — checks first, so repeat exports don't re-grant it) rather than every
+     file individually; files created in a link-shared folder inherit its read access, so this is
+     half the Drive API calls per-file sharing cost. An "Update" only touches a matched row's
+     picture cell once its replacement is ready — never blanks it in between.
   2. **Embed (background):** `embedPictures()` calls the Apps Script in `apps-script/embed/` via
      `scripts.run` with the user's token. It swaps each `=IMAGE()` for an in-cell image
      (`newCellImage().setSourceUrl()`), reads back which cells took, and the app deletes those Drive
      files — so no public links remain. Failure never rejects: links just stay, and a toast says so.
+  - **If picture upload itself fails** (stage 1), the Sheet still stands, text-only — `images`
+    resolves `{error}` instead of throwing, and `embedding` short-circuits to a no-op result rather
+    than trying to embed nothing.
   - **Why stage 1 exists:** the Sheets REST API cannot upload image bytes into a sheet — `=IMAGE()`
     with a URL Google can fetch without login is the only API route to a picture. Stage 2 needs
     Apps Script because only `SpreadsheetApp` can create cell images.

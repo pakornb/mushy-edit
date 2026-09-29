@@ -153,7 +153,7 @@ export function showSheetResult(res, { autoOpen = false } = {}) {
     p.textContent = res.updated != null
       ? `Updated — ${res.updated} refreshed, ${res.added} added, ${res.removed} flagged, in ${res.seconds.toFixed(1)}s.`
       : `Exported ${res.shots} shots${res.assets ? ` and ${res.assets} assets` : ''} in ${res.seconds.toFixed(1)}s.`;
-    p.textContent += ' Pictures are being moved into the Sheet in the background — you can open it now.';
+    p.textContent += ' Pictures are uploading in the background — you can open it now and they’ll fill in as they finish.';
     const a = document.createElement('a');
     a.href = res.url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'btn';
     a.textContent = 'Open in Google Sheets ↗';

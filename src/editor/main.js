@@ -504,7 +504,10 @@ function wire() {
     }
     overlay(false);
     showSheetResult(res, resultOpts);
-    // The Sheet is already usable with linked pictures; embedding finishes on its own.
+    // The Sheet (text + layout) is already usable; pictures upload and embed
+    // entirely in the background from here.
+    const img = await res.images;
+    if (img && img.error) { toast('Sheet is up to date, but pictures failed to upload: ' + img.error); return; }
     const emb = await res.embedding;
     if (!emb || !emb.total) return;
     if (emb.error) toast('Pictures stay as Drive links (embedding failed: ' + emb.error + ')');

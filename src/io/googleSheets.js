@@ -1,20 +1,30 @@
 // Google Sheets export: sign in, pick (or create) a Sheet in the user's own
-// Drive, upload each row's thumbnail to Drive, then write the whole
-// breakdown tab in one Sheets API batchUpdate.
+// Drive, write the breakdown tab (text + layout only) in one Sheets API
+// batchUpdate, and return immediately — pictures are uploaded and dropped in
+// afterward, entirely in the background, so the caller gets a usable link
+// without waiting on Drive at all.
 //
-// Images, in two stages:
+// Images, in two background stages, after the Sheet (and its returned url)
+// already exist:
 //  1. Fast links. The Sheets API can't upload image bytes into a sheet — it
 //     can only write =IMAGE(url) formulas whose URL Google's servers can fetch
 //     without logging in. So each thumbnail is uploaded (in parallel) to a
-//     "Mushy Edit thumbnails" folder in the user's Drive, shared "anyone with
-//     the link", and the tab is written with those links. The Sheet is
-//     complete and usable at this point.
+//     "Mushy Edit thumbnails" folder in the user's Drive, then a second small
+//     batchUpdate drops =IMAGE() formulas into the (until now empty) picture
+//     cells. The folder itself is shared "anyone with the link" once (see
+//     ensureFolderShared) rather than each file individually — Drive files
+//     inherit a link-shared parent folder's read access, so this halves the
+//     Drive API calls this stage needs compared to per-file sharing.
 //  2. Embed, in the background. A small Apps Script (apps-script/embed/ in
 //     this repo), deployed once by us as an API executable in the same GCP
 //     project, is called via scripts.run with the user's own token. It turns
 //     each linked picture into an image stored inside the Sheet; the app then
 //     deletes those Drive files, so no public links are left behind. If this
 //     stage fails, the links simply stay and the Sheet still works.
+//
+// Both background stages never reject: a failure leaves the Sheet exactly as
+// far along as it got (text-only, or links-but-not-embedded) and is reported
+// through the `images`/`embedding` promises on the result, not thrown.
 //
 // Sign-in, when this app is served through tools-dashboard (2026-09-28): no
 // window at all in the common case. ensureToken() reuses the Hornet
@@ -150,14 +160,32 @@ async function api(url, { method = 'GET', json, body, headers = {} } = {}) {
 }
 
 // ---------- Drive thumbnails ----------
+// Shares the thumbnails folder itself "anyone with the link" (once — checked
+// first so repeat exports don't re-grant it) instead of every file inside it.
+// Files created in a link-shared folder inherit its read access, so this
+// drops one Drive API round trip per thumbnail versus sharing each file.
+async function ensureFolderShared(folderId) {
+  const found = await api(`https://www.googleapis.com/drive/v3/files/${folderId}/permissions?fields=permissions(type,role)`);
+  const already = (found.permissions || []).some((p) => p.type === 'anyone' && p.role === 'reader');
+  if (already) return;
+  await api(`https://www.googleapis.com/drive/v3/files/${folderId}/permissions?fields=id`, {
+    method: 'POST', json: { role: 'reader', type: 'anyone' },
+  });
+}
+
 async function thumbFolder() {
   const q = encodeURIComponent(`name='${THUMB_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
   const found = await api(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)&pageSize=1`);
-  if (found.files && found.files.length) return found.files[0].id;
-  const made = await api('https://www.googleapis.com/drive/v3/files?fields=id', {
-    method: 'POST', json: { name: THUMB_FOLDER, mimeType: 'application/vnd.google-apps.folder' },
-  });
-  return made.id;
+  let id;
+  if (found.files && found.files.length) id = found.files[0].id;
+  else {
+    const made = await api('https://www.googleapis.com/drive/v3/files?fields=id', {
+      method: 'POST', json: { name: THUMB_FOLDER, mimeType: 'application/vnd.google-apps.folder' },
+    });
+    id = made.id;
+  }
+  await ensureFolderShared(id);
+  return id;
 }
 
 async function uploadThumb(dataUrl, name, folderId) {
@@ -171,9 +199,6 @@ async function uploadThumb(dataUrl, name, folderId) {
   const file = await api('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
     method: 'POST', body, headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
   });
-  await api(`https://www.googleapis.com/drive/v3/files/${file.id}/permissions?fields=id`, {
-    method: 'POST', json: { role: 'reader', type: 'anyone' },
-  });
   return file.id;
 }
 
@@ -185,18 +210,14 @@ async function pool(items, n, fn) {
   return out;
 }
 
-// jobs: [{ dataUrl, name } | null] -> [fileId | null], in parallel
-async function uploadThumbs(jobs, onStatus) {
+// jobs: [{ dataUrl, name } | null] -> [fileId | null], in parallel. Runs in
+// the background (see buildBreakdownSheet/updateBreakdownSheet) with no
+// status callback — there's no blocking UI left for it to report into.
+async function uploadThumbs(jobs) {
   const real = jobs.filter(Boolean).length;
   if (!real) return jobs.map(() => null);
   const folder = await thumbFolder();
-  let done = 0;
-  return pool(jobs, UPLOAD_CONCURRENCY, async (j) => {
-    if (!j) return null;
-    const id = await uploadThumb(j.dataUrl, j.name, folder);
-    onStatus && onStatus(`Uploading thumbnails… ${++done}/${real}`);
-    return id;
-  });
+  return pool(jobs, UPLOAD_CONCURRENCY, async (j) => (j ? uploadThumb(j.dataUrl, j.name, folder) : null));
 }
 
 async function trashFiles(ids) {
@@ -272,7 +293,14 @@ function orderedAssets(data) {
 /**
  * data: buildBreakdownData(true) output (per-row thumbnails as data URLs).
  * spreadsheetId: target Sheet, or null to create one titled createTitle.
- * Returns { spreadsheetId, sheetId, url, shots, assets }.
+ * Writes everything EXCEPT pictures in one batchUpdate and returns as soon as
+ * that lands — row heights/column widths are already correct (sized from the
+ * local thumbnail dimensions, not from anything Drive-dependent), so the
+ * picture cells just start empty and get filled in by the `images` promise.
+ * Returns { spreadsheetId, sheetId, url, shots, assets, images, embedding }.
+ * `images` resolves to { error } once picture links are in the Sheet (or
+ * uploading failed — the Sheet itself still stands, text-only). `embedding`
+ * resolves after that, same shape as embedPictures() always returned.
  */
 export async function buildBreakdownSheet({ spreadsheetId, createTitle, data, baseName, onStatus }) {
   let defaultSheetId = null;
@@ -288,31 +316,24 @@ export async function buildBreakdownSheet({ spreadsheetId, createTitle, data, ba
   const shots = data.shots || [];
   const assets = orderedAssets(data);
   const safe = (baseName || 'breakdown').replace(/[^\w.-]+/g, '_');
-  const ids = await uploadThumbs([
-    ...shots.map((s) => (s.thumbnail ? { dataUrl: s.thumbnail, name: `${safe}_shot${s.id}.jpg` } : null)),
-    ...assets.map(({ a }, i) => (a.thumbnail ? { dataUrl: a.thumbnail, name: `${safe}_asset${i + 1}.jpg` } : null)),
-  ], onStatus);
-  const shotIds = ids.slice(0, shots.length), assetIds = ids.slice(shots.length);
 
   onStatus && onStatus('Writing sheet…');
   const requests = [];
-  const pics = []; // { sheetId, row, col, fileId } for stage 2
   const when = stamp();
 
   // Shots tab
   const sheetId = newSheetId();
-  shotIds.forEach((fileId, i) => { if (fileId) pics.push({ sheetId, row: i + 1, col: 1, fileId }); });
   const stages = shotStages(data);
   const headers = ['Shot', 'Storyboard', 'Name', `Length (${data.lenUnit === 'frames' ? 'f' : 's'})`, ...stages.map(cap), 'Notes'];
   const firstStage = 4, notesCol = firstStage + stages.length;
   const center = { horizontalAlignment: 'CENTER' }, wrap = { wrapStrategy: 'WRAP' };
+  const rowH = shots.map((s) => scaledH(MONTAGE_W, s.thumbW, s.thumbH));
   const rows = shots.map((s, i) => {
-    const h = scaledH(MONTAGE_W, s.thumbW, s.thumbH);
     const tv = s.taskVals || {};
     return {
-      h,
+      h: rowH[i],
       values: [
-        cell(s.id), cell(shotIds[i] ? image(shotIds[i], MONTAGE_W, h) : ''), cell(s.tag || s.name || '', wrap),
+        cell(s.id), cell(''), cell(s.tag || s.name || '', wrap),
         cell(s.length ?? '', center), ...stages.map((t) => cell(tv[t] ?? '', center)), cell(s.note || '', wrap),
       ],
     };
@@ -326,15 +347,15 @@ export async function buildBreakdownSheet({ spreadsheetId, createTitle, data, ba
   rows.forEach((r, i) => requests.push(rowHeight(sheetId, i + 1, r.h + PAD)));
 
   // Assets tab
+  let aId = null;
+  const aRowH = assets.map(({ a }) => scaledH(REF_W, a.thumbW, a.thumbH));
   if (assets.length) {
-    const aId = newSheetId();
-    assetIds.forEach((fileId, i) => { if (fileId) pics.push({ sheetId: aId, row: i + 1, col: 1, fileId }); });
+    aId = newSheetId();
     const tasks = data.assetTasks && data.assetTasks.length ? data.assetTasks : ['model', 'lookdev', 'rig'];
     const aHeaders = ['Category', 'Reference', 'Asset', ...tasks.map(cap)];
     const aRows = assets.map(({ a, catLabel }, i) => {
-      const h = scaledH(REF_W, a.thumbW, a.thumbH);
       const tv = a.tasks || {};
-      return { h, has: !!assetIds[i], values: [cell(catLabel), cell(assetIds[i] ? image(assetIds[i], REF_W, h) : ''), cell(a.name || ''), ...tasks.map((t) => cell(tv[t] ?? '', center))] };
+      return { h: aRowH[i], has: !!a.thumbnail, values: [cell(catLabel), cell(''), cell(a.name || ''), ...tasks.map((t) => cell(tv[t] ?? '', center))] };
     });
     requests.push({ addSheet: { properties: { sheetId: aId, title: `Assets ${when}`, index: 1,
       gridProperties: { rowCount: Math.max(2, aRows.length + 1), columnCount: aHeaders.length, frozenRowCount: 1 } } } });
@@ -348,10 +369,46 @@ export async function buildBreakdownSheet({ spreadsheetId, createTitle, data, ba
   if (defaultSheetId != null) requests.push({ deleteSheet: { sheetId: defaultSheetId } });
 
   await api(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, { method: 'POST', json: { requests } });
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetId}`;
+
+  // Pictures, entirely in the background — everything above is already
+  // written and the Sheet is real and linkable. Never rejects.
+  const images = (async () => {
+    try {
+      // No onStatus here — that callback is the app's full-screen blocking
+      // overlay (see main.js's runSheets), already dismissed once Phase A
+      // returned. Calling it from this background stage would reopen it.
+      const ids = await uploadThumbs([
+        ...shots.map((s) => (s.thumbnail ? { dataUrl: s.thumbnail, name: `${safe}_shot${s.id}.jpg` } : null)),
+        ...assets.map(({ a }, i) => (a.thumbnail ? { dataUrl: a.thumbnail, name: `${safe}_asset${i + 1}.jpg` } : null)),
+      ]);
+      const shotIds = ids.slice(0, shots.length), assetIds = ids.slice(shots.length);
+      const picRequests = [];
+      const pics = []; // { sheetId, row, col, fileId } for stage 2
+      shotIds.forEach((fileId, i) => {
+        if (!fileId) return;
+        picRequests.push(setCell(sheetId, i + 1, 1, cell(image(fileId, MONTAGE_W, rowH[i]))));
+        pics.push({ sheetId, row: i + 1, col: 1, fileId });
+      });
+      if (aId != null) assetIds.forEach((fileId, i) => {
+        if (!fileId) return;
+        picRequests.push(setCell(aId, i + 1, 1, cell(image(fileId, REF_W, aRowH[i]))));
+        pics.push({ sheetId: aId, row: i + 1, col: 1, fileId });
+      });
+      if (picRequests.length) {
+        await api(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, { method: 'POST', json: { requests: picRequests } });
+      }
+      return { pics, error: null };
+    } catch (e) {
+      console.warn('Uploading pictures failed; Sheet stays text-only.', e);
+      return { pics: [], error: e.message || String(e) };
+    }
+  })();
+
   return {
-    spreadsheetId, sheetId, shots: shots.length, assets: assets.length,
-    url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetId}`,
-    embedding: embedPictures(spreadsheetId, pics), // runs on after the Sheet is ready
+    spreadsheetId, sheetId, shots: shots.length, assets: assets.length, url,
+    images: images.then(({ error }) => ({ error })),
+    embedding: images.then(({ pics, error }) => (error ? { embedded: 0, total: 0, error } : embedPictures(spreadsheetId, pics))),
   };
 }
 
@@ -363,6 +420,12 @@ export async function buildBreakdownSheet({ spreadsheetId, createTitle, data, ba
  * shots are appended; rows whose shot vanished are flagged red with a
  * "[not in latest]" note prefix and keep their last picture. Replaced
  * thumbnails are deleted from Drive afterwards.
+ *
+ * Text/layout changes land in one batchUpdate and the function returns right
+ * after — a matched row's existing picture is left completely alone until
+ * its replacement is ready, so nothing ever goes blank; only brand-new rows
+ * start with an empty picture cell. See `images`/`embedding` on the result,
+ * same contract as buildBreakdownSheet().
  */
 export async function updateBreakdownSheet({ spreadsheetId, sheetId, data, baseName, onStatus }) {
   onStatus && onStatus('Reading sheet…');
@@ -390,33 +453,28 @@ export async function updateBreakdownSheet({ spreadsheetId, sheetId, data, baseN
     return { s, key, row: key && nameToRow.has(key) ? nameToRow.get(key) : null };
   });
   const safe = (baseName || 'breakdown').replace(/[^\w.-]+/g, '_');
-  const ids = await uploadThumbs(plan.map(({ s }) => (s.thumbnail ? { dataUrl: s.thumbnail, name: `${safe}_shot${s.id}.jpg` } : null)), onStatus);
 
   onStatus && onStatus('Updating sheet…');
   const requests = [];
-  const pics = []; // { sheetId, row, col, fileId } for stage 2
-  const replaced = [];
   const seen = new Set();
   let appendAt = Math.max(grid.length, 1), updated = 0, added = 0, removed = 0;
   const newCount = plan.filter((p) => p.row == null).length;
   const need = appendAt + newCount - props.gridProperties.rowCount;
   if (need > 0) requests.push({ appendDimension: { sheetId, dimension: 'ROWS', length: need } });
 
+  const rowFor = new Array(plan.length); // row each shot landed at, for stage 2
   plan.forEach(({ s, key, row }, i) => {
     const h = scaledH(MONTAGE_W, s.thumbW, s.thumbH);
-    const pic = ids[i] ? cell(image(ids[i], MONTAGE_W, h)) : null;
     if (row != null) {
       seen.add(key);
-      // Only still-linked pictures have a Drive file; embedded ones don't.
-      const old = fileIdFromFormula((grid[row] || [])[storyC]);
-      if (pic) { requests.push(setCell(sheetId, row, storyC, pic)); pics.push({ sheetId, row, col: storyC, fileId: ids[i] }); if (old) replaced.push(old); }
+      rowFor[i] = row;
       if (lenC >= 0 && s.length != null) requests.push(setCell(sheetId, row, lenC, cell(s.length, { horizontalAlignment: 'CENTER' })));
       requests.push(rowHeight(sheetId, row, h + PAD));
       updated++;
     } else {
       const r = appendAt++;
+      rowFor[i] = r;
       if (shotC >= 0) requests.push(setCell(sheetId, r, shotC, cell(s.id)));
-      if (pic) { requests.push(setCell(sheetId, r, storyC, pic)); pics.push({ sheetId, row: r, col: storyC, fileId: ids[i] }); }
       requests.push(setCell(sheetId, r, nameC, cell(key, { wrapStrategy: 'WRAP' })));
       if (lenC >= 0 && s.length != null) requests.push(setCell(sheetId, r, lenC, cell(s.length, { horizontalAlignment: 'CENTER' })));
       if (notesC >= 0) requests.push(setCell(sheetId, r, notesC, cell(s.note || '', { wrapStrategy: 'WRAP' })));
@@ -443,10 +501,41 @@ export async function updateBreakdownSheet({ spreadsheetId, sheetId, data, baseN
   if (requests.length) {
     await api(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, { method: 'POST', json: { requests } });
   }
-  if (replaced.length) await trashFiles(replaced);
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetId}`;
+
+  // Pictures, entirely in the background. Never rejects. No onStatus here —
+  // see the matching note in buildBreakdownSheet().
+  const images = (async () => {
+    try {
+      const ids = await uploadThumbs(plan.map(({ s }) => (s.thumbnail ? { dataUrl: s.thumbnail, name: `${safe}_shot${s.id}.jpg` } : null)));
+      const picRequests = [];
+      const pics = []; // { sheetId, row, col, fileId } for stage 2
+      const replaced = [];
+      plan.forEach(({ s }, i) => {
+        const fileId = ids[i];
+        if (!fileId) return;
+        const row = rowFor[i];
+        const h = scaledH(MONTAGE_W, s.thumbW, s.thumbH);
+        picRequests.push(setCell(sheetId, row, storyC, cell(image(fileId, MONTAGE_W, h))));
+        pics.push({ sheetId, row, col: storyC, fileId });
+        // Only still-linked pictures have a Drive file to replace; embedded ones don't.
+        const old = fileIdFromFormula((grid[row] || [])[storyC]);
+        if (old) replaced.push(old);
+      });
+      if (picRequests.length) {
+        await api(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, { method: 'POST', json: { requests: picRequests } });
+      }
+      if (replaced.length) await trashFiles(replaced);
+      return { pics, error: null };
+    } catch (e) {
+      console.warn('Uploading pictures failed; existing Sheet pictures stay as-is.', e);
+      return { pics: [], error: e.message || String(e) };
+    }
+  })();
+
   return {
-    spreadsheetId, sheetId, updated, added, removed,
-    url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetId}`,
-    embedding: embedPictures(spreadsheetId, pics), // runs on after the Sheet is ready
+    spreadsheetId, sheetId, updated, added, removed, url,
+    images: images.then(({ error }) => ({ error })),
+    embedding: images.then(({ pics, error }) => (error ? { embedded: 0, total: 0, error } : embedPictures(spreadsheetId, pics))),
   };
 }
