@@ -5,6 +5,7 @@ import {
 } from '../core/model.js';
 import { mutate } from '../core/history.js';
 import { createAnnotator, annotatorToolbar, drawAnnos } from '../core/annotate.js';
+import { buildBreakdownSheet, updateBreakdownSheet } from '../io/googleSheets.js';
 
 let refresh = () => {};
 export function setRefresh(fn) { refresh = fn; }
@@ -17,7 +18,7 @@ function shotMontage(sh, cols = 3, cell = 200) {
   const cw = cell, ch = Math.round(cell * t0.height / t0.width);
   const n = boards.length, c = Math.min(cols, n), r = Math.ceil(n / c);
   const cv = document.createElement('canvas'); cv.width = c * cw; cv.height = r * ch;
-  const ctx = cv.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
   boards.forEach((fi, i) => { const rr = Math.floor(i / c), cc = i % c; ctx.drawImage(P.frames[fi].thumb, cc * cw, rr * ch, cw, ch); });
   return { url: cv.toDataURL('image/jpeg', 0.72), w: cv.width, h: cv.height };
 }
@@ -53,7 +54,7 @@ export async function buildBreakdownData(withThumbs = true) {
     const m = shotMeta(P, sh);
     const mont = withThumbs ? shotMontage(sh) : null;
     return {
-      id: si + 1, name: sh.name || '', tag: m.tag || '',
+      id: si + 1, name: sh.name || P.frames[sh.start].name, tag: m.tag || '',
       length: lenToUnit(P, shotLenSec(P, sh)), note: m.note || '',
       taskVals: m.taskVals || m.stageVals || {}, disabled: isShotDisabled(P, sh),
       thumbnail: mont ? mont.url : null, thumbW: mont ? mont.w : 152, thumbH: mont ? mont.h : 88,
@@ -68,12 +69,96 @@ export async function buildBreakdownData(withThumbs = true) {
   return { kind: 'breakdown', lenUnit: P.lenUnit, fps: P.fps, shotTasks: P.shotTasks, assetTasks: P.assetTasks, assetCats: P.assetCats, shots, assets };
 }
 
-export async function exportBreakdownJSON() {
+// ---------- Google Sheets export ----------
+// Build a new breakdown tab in a Sheet the user picks (or creates) in their
+// own Drive, or update the tab this project exported to last time. `connect`
+// resolves to { token, expiresIn, spreadsheetId?/spreadsheetName?/create? } —
+// from googleSheets.js's ensureToken() (no window, the common case) merged
+// with chooseSheetDestination()'s inline choice, or from openConnect() when
+// Picker is actually needed (see that file's header note). Which Sheet/tab
+// a project exported to is saved in the work file (project.sheetsSpreadsheetId
+// / sheetsSpreadsheetName / sheetsTabId).
+export async function exportToGoogleSheet(connect, onStatus) {
+  onStatus('Waiting for Google…');
+  const choice = await connect;
+  const t0 = performance.now();
+  onStatus('Preparing thumbnails…');
   const data = await buildBreakdownData(true);
-  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = `${P.baseName}_breakdown.json`;
-  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  const res = await buildBreakdownSheet({
+    spreadsheetId: choice.create ? null : choice.spreadsheetId,
+    createTitle: `${P.baseName} breakdown`,
+    data, baseName: P.baseName, onStatus,
+  });
+  P.sheetsSpreadsheetId = res.spreadsheetId;
+  P.sheetsSpreadsheetName = choice.create ? `${P.baseName} breakdown` : (choice.spreadsheetName || '');
+  P.sheetsTabId = res.sheetId;
+  return { ...res, seconds: (performance.now() - t0) / 1000 };
+}
+
+/**
+ * Where should the breakdown go? Inline modal, no popup window — unlike the
+ * old design, "Use current"/"Create new" here never need Google's own UI at
+ * all, only "Choose a Google Sheet…" does (Picker still needs a window; see
+ * public/google-connect.html and googleSheets.js's header note for why).
+ *
+ * Takes callbacks rather than returning a Promise so onPick can call
+ * openConnect() (window.open) synchronously inside its own button's click —
+ * going through an intermediate Promise/await first, even just one
+ * microtask's worth, risks the browser treating the eventual window.open()
+ * as no longer tied to a real user gesture and blocking it (see
+ * googleSheets.js's file header — this bit the original design more than
+ * once). onChoice has no such constraint, since neither of its two choices
+ * opens a window.
+ */
+export function chooseSheetDestination(current, { onPick, onChoice }) {
+  modal('Export to Google Sheet', (body) => {
+    const p = el('p', '');
+    p.textContent = "Where should the breakdown go? It's added as a new tab, so nothing already in the Sheet is touched.";
+    body.appendChild(p);
+    if (current && current.id) {
+      const b = el('button', 'btn ghost choice-btn');
+      b.innerHTML = `Use “${escapeHtml(current.name || 'this project’s Sheet')}”<span class="sub">The Sheet this project exported to last time</span>`;
+      b.onclick = () => { closeModal(false); onChoice({ spreadsheetId: current.id, spreadsheetName: current.name || '' }); };
+      body.appendChild(b);
+    }
+    const pick = el('button', 'btn ghost choice-btn');
+    pick.innerHTML = 'Choose a Google Sheet…<span class="sub">Any spreadsheet in your Drive</span>';
+    pick.onclick = () => { closeModal(false); onPick(); };
+    const create = el('button', 'btn ghost choice-btn');
+    create.innerHTML = 'Create a new Google Sheet<span class="sub">Made in your Drive, named after this project</span>';
+    create.onclick = () => { closeModal(false); onChoice({ create: true }); };
+    body.append(pick, create);
+  }, false); // dismissing without choosing is a silent no-op, same as the asset window
+}
+
+export async function updateGoogleSheet(connect, onStatus) {
+  if (connect) { onStatus('Waiting for Google…'); await connect; }
+  const t0 = performance.now();
+  onStatus('Preparing thumbnails…');
+  const data = await buildBreakdownData(true);
+  const res = await updateBreakdownSheet({
+    spreadsheetId: P.sheetsSpreadsheetId, sheetId: P.sheetsTabId, data, baseName: P.baseName, onStatus,
+  });
+  return { ...res, seconds: (performance.now() - t0) / 1000 };
+}
+
+// autoOpen: true for a freshly created Sheet, since the user has no other
+// reference to it yet (unlike "use current"/"choose", where they already
+// know — or just picked — which Sheet it is). The manual link stays either
+// way, since a popup blocker can silently drop the automatic window.open.
+export function showSheetResult(res, { autoOpen = false } = {}) {
+  if (autoOpen) window.open(res.url, '_blank', 'noopener');
+  modal('Google Sheet ready', (body) => {
+    const p = el('p', '');
+    p.textContent = res.updated != null
+      ? `Updated — ${res.updated} refreshed, ${res.added} added, ${res.removed} flagged, in ${res.seconds.toFixed(1)}s.`
+      : `Exported ${res.shots} shots${res.assets ? ` and ${res.assets} assets` : ''} in ${res.seconds.toFixed(1)}s.`;
+    p.textContent += ' Pictures are uploading in the background — you can open it now and they’ll fill in as they finish.';
+    const a = document.createElement('a');
+    a.href = res.url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'btn';
+    a.textContent = 'Open in Google Sheets ↗';
+    body.append(p, a);
+  });
 }
 
 // ---------- modal shell ----------

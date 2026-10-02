@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hornet-mushy-edit",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-25",
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist",
+    "run_worker_first": true,
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  },
+  // No `routes` here on purpose: tools-dashboard owns the whole
+  // tools.hellohornet.com zone and reaches this Worker via the MUSHY_EDIT
+  // service binding in its own wrangler.jsonc. A route declared here would
+  // take precedence over that (Cloudflare picks the more specific zone
+  // route), bypassing tools-dashboard's central Google-SSO gate entirely.
+  //
+  // Persistent preview deploy, pushed to by the `preview` branch (see
+  // .github/workflows/preview.yml). tools-dashboard's own preview
+  // environment reaches this via its MUSHY_EDIT service binding pointed at
+  // hornet-mushy-edit-preview instead of the prod name.
+  "env": {
+    "preview": {
+      "name": "hornet-mushy-edit-preview"
+    }
+  }
+}

@@ -34,6 +34,12 @@ export const project = {
   audio: null,            // { name, blob, url, offsetSec, inSec, outSec, gain, fadeInFrames, fadeOutFrames } | null
   shots: [],              // computed: { start, end, count, name }
   cuts: new Set(),        // computed shot-start indices
+  // Where "Export to Google Sheet…" last put this project's breakdown, so "Update Google
+  // Sheet" can target that exact tab. Saved in the work file; deliberately NOT in undo
+  // snapshots — it records where an export went, not an edit to undo.
+  sheetsSpreadsheetId: '',
+  sheetsSpreadsheetName: '',
+  sheetsTabId: null,
 };
 
 export const IMG_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
