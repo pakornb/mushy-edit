@@ -59,20 +59,22 @@ export function renderInspector(container, frameIndex, cb) {
   // ---- selected-board action row (acts on frameIndex) ----
   const off = isBoardDisabled(P, frameIndex);
   const pin = isPinned(P, frameIndex);
+  const isStart = isShotStart(P, frameIndex);
   const act = el('div', 'board-actions');
   const cap = el('span', 'ba-cap'); cap.textContent = 'this board';
   act.appendChild(cap);
+
   act.appendChild(iconbtn(off ? '⊘' : '👁', off ? 'show board (h)' : 'hide board (h)', off ? 'danger' : '', () => {
     mutate(() => { if (off) P.boardDisabled.delete(P.frames[frameIndex].name); else P.boardDisabled.add(P.frames[frameIndex].name); }); onStructural();
   }));
   act.appendChild(iconbtn('📌', pin ? 'unpin board (p)' : 'pin board (p)', pin ? 'on' : '', () => {
     mutate(() => { if (pin) P.pinned.delete(P.frames[frameIndex].name); else P.pinned.add(P.frames[frameIndex].name); }); onStructural();
   }));
-  const isStart = isShotStart(P, frameIndex);
   act.appendChild(iconbtn('✂', isStart ? 'merge into previous shot (c)' : 'cut — new shot here (c)', (boundaryState(P, frameIndex) !== 'auto' ? 'on ' : '') + 'big', () => {
     mutate(() => { if (isStart) mergeUp(P, frameIndex); else forceCut(P, frameIndex); }); onStructural();
   }, frameIndex === 0));
   if (boundaryState(P, frameIndex) !== 'auto') act.appendChild(iconbtn('↺', 'reset this cut to auto', '', () => { mutate(() => resetBoundary(P, frameIndex)); onStructural(); }));
+
   if (!off) {
     const d = document.createElement('input');
     d.type = 'number'; d.min = '0'; d.step = P.lenUnit === 'frames' ? '1' : '0.05'; d.className = 'ba-dur';

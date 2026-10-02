@@ -233,6 +233,18 @@ just `npm install && npm run build` in place. Always run a build before committi
    icons), the Tasks grid. Discuss the approach before touching this — don't assume grouping
    controls into a menu is the right fix; that was tried once and reverted (lost the icon
    affordance without being asked to make that trade).
+8. **Rework resolution presets** (`index.html` header: `resPreset` select, `resW`/`resH` number
+   inputs, `resLock` aspect-lock checkbox) — noted for later, NOT started.
+   - Add a **% scale** option — scale the current `resW`×`resH` by a percentage rather than only
+     jumping to a fixed preset. Needs deciding: scale relative to the *current* resolution, or to
+     the source images' native resolution (`resW`/`resH` default to the largest source image, per
+     `frames.js` `ingest()` — "scale to 50% of source" and "scale to 50% of current" aren't always
+     the same value once the user has already changed it).
+   - Add a **flip XY** option — swap `resW`/`resH` in one action (e.g. 1920×1080 ↔ 1080×1920) for
+     switching landscape/portrait without retyping both fields. Straightforward once scoped: swap
+     the two values, keep `resLock`'s aspect ratio in sync (it's derived from `resW/resH` — see
+     `resAspect` in `main.js`), and call `layoutPreview()` same as the existing `resW`/`resH`/
+     `resPreset` change handlers already do.
 
 ## Things that have bitten us (avoid regressions)
 - **`imgCache` (`main.js`) must be keyed by filename, never by array index.** It caches the

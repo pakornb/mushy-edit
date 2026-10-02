@@ -3,7 +3,7 @@
 // keeping all timing/pins/annotations/tasks — they're keyed by filename, not
 // by pixel content). Both mutate `frame.full`/`frame.url` directly and are
 // NOT undo-able: the undo system deliberately never snapshots heavy blobs.
-import { loadImage, computeLuma, diffLuma, makeTinyCtx, makeThumb } from './frames.js';
+import { loadImage, computeLuma, diffLuma, makeTinyCtx, makeThumb, ensureLuma } from './frames.js';
 
 const AR_TOL = 0.03;
 function nearRatio(ar, target) { return Math.abs(ar - target) / target < AR_TOL; }
@@ -98,13 +98,10 @@ export async function refreshDiffsAround(p, touchedFis) {
   const tctx = makeTinyCtx();
   const need = new Set();
   touchedFis.forEach((fi) => { need.add(fi); if (fi > 0) need.add(fi - 1); if (fi < p.frames.length - 1) need.add(fi + 1); });
-  for (const fi of need) {
-    const f = p.frames[fi];
-    if (f.luma) continue;
-    const url = URL.createObjectURL(f.full);
-    const img = await loadImage(url).catch(() => null);
-    URL.revokeObjectURL(url);
-    if (img) f.luma = computeLuma(tctx, img);
-  }
-  need.forEach((fi) => { if (fi > 0) p.diffs[fi] = diffLuma(p.frames[fi - 1].luma, p.frames[fi].luma); });
+  for (const fi of need) await ensureLuma(p.frames[fi], tctx);
+  need.forEach((fi) => {
+    if (fi === 0) return;
+    const a = p.frames[fi - 1].luma, b = p.frames[fi].luma;
+    if (a && b) p.diffs[fi] = diffLuma(a, b);
+  });
 }
