@@ -1,89 +1,150 @@
 # Mushy Edit
 
-Storyboard breakdown → animatic playback → mp4 / review viewer, plus the
-Google-Sheet time/task-estimation export. Vite + vanilla JS, deployed on Vercel.
-ffmpeg.wasm mp4 export requires cross-origin isolation (COOP/COEP), which is why
-this ships as a hosted app rather than a single HTML file — the headers are set
-in `vercel.json` and in the Vite dev server.
+A browser-based tool for timing storyboards, reviewing them as an animatic, and
+exporting a shot and asset breakdown to Google Sheets. It does timing, review and
+handoff; it is deliberately not a compositing editor, so there is no per-image
+move, scale, rotate or crop. Framing is controlled with fit modes.
 
-## What's in this step (step 1 — deployable skeleton)
+It is served inside the Hornet Tools Dashboard at `/mushy-edit/`. It also deploys
+standalone to Vercel (`vercel.json`).
 
-- Vite project with two entries: `index.html` (editor) and `view.html` (viewer).
-- `vercel.json` with COOP/COEP headers so `SharedArrayBuffer` / ffmpeg.wasm work once hosted.
-- Image + zip loading, filename shot-grouping (`MCDS_10_001` → shot `MCDS_10`) or diff-cut grouping.
-- A proportional timeline (block width = shot length) with a 30s target marker, live preview, fps control.
-- An isolation badge that tells you whether mp4 export will be available.
+## What it does
 
-Coming next: work-file save/open, single-shot inspector, playback transport,
-scratch audio with frame-accurate slip + in/out, mp4 export, the viewer player,
-and the ported Google-Sheet export.
+### Load a storyboard
+Drop a zip, a set of images, an image sequence or a saved work file. Boards are
+grouped into shots by filename (for example `MCDS_10_001` becomes shot `MCDS_10`) or by
+detected cuts. A frame splitter (`/frame-splitter.html`, opened from the start screen's
+**Split a storyboard sheet**) cuts a storyboard sheet into individual frames. Everything
+the user does is keyed by filename, so reloading updated art with the same names keeps the
+edit.
 
-## Run locally
+### Time it
+- The timeline is one surface: tiles are boards with width proportional to time, shots
+  appear as colored stripes, a draggable playhead scrubs frame by frame, and dragging on the
+  ruler marquee-selects a range. Zoom with `+`/`-` or Ctrl/Cmd + wheel.
+- **Retiming:** each board's duration in seconds is the source of truth, and a shot's
+  length is the sum of its enabled boards. Drag a tile vertically to change its duration
+  (neighbors flex), or horizontally to slide it ("mushy" offset). Multiple boards can be
+  scaled together. Neighbors are weighted by distance from the edited selection through a
+  *falloff* control (reach slider and a curve: smooth, linear, ease-in, ease-out);
+  Shift doubles the reach.
+- **Pins** (`p`) are hard walls: a pinned board never changes, and edits are capped at
+  the available slack between pins.
+- **Spot length** is soft: a target length (default 30 s) with a budget meter. **Auto**
+  gives unpinned boards an equal share (it runs automatically on a fresh load) and
+  **Rebalance** scales unpinned boards to hit the spot exactly.
+- Hide or show a board (`h`), cut or merge shots (`c`, **Cut**), and re-enable hidden
+  items from their timeline markers. Shots can be grouped by detected cuts or filename,
+  with length shown in seconds or frames.
+- Frame rate (`fps`), spot length and output resolution (presets including 1080p, 4K UHD,
+  2048x1152, 720p, 1440p, 4:3, square, vertical and 2.35:1, or custom with a lock) are set
+  in the header.
+- Undo and redo cover edits (`Cmd/Ctrl+Z`, with Shift to redo).
+
+### Fit and preview
+The preview is a canvas drawn with the same fit logic as mp4 export and the viewer, so
+all three match. Fit modes: cover (default, crops the long side), contain (bars), fit
+width, fit height. A mode can be set globally and overridden per board.
+
+### Audio
+Load a scratch audio track with a waveform, frame-accurate slip (-1f, -0.1s, +0.1s, +1f),
+in and out trimming, **set sync to playhead** and **use audio length**.
+
+### Annotate
+Draw vector annotations on a board. Strokes are stored relative to the image, so they stay
+in place under any fit mode, and they appear in the preview, the mp4 and the viewer.
+
+### Shots, tasks, notes and assets
+The inspector shows a filmstrip of the selected shot and per-shot sections for Shot,
+Tasks and Notes. The **Assets** window tracks assets by category (character, set, prop)
+against shots. **Preview sheet** shows the breakdown as an HTML sheet.
+
+### Save and open
+**Save** writes `<name>_work.animatic.json`, a work file embedding the full-resolution boards,
+audio and all state. **Open** restores it.
+
+### Export
+- **Export mp4 (final)** and **Export mp4 (draft, fast; max width 960)**, rendered in the
+  browser with ffmpeg.wasm. Frames are fitted to the output resolution and the audio is
+  muxed at its slip offset.
+- **Export review viewer:** a viewer JSON (thumbnails, timing, annotations, audio) that
+  opens in the read-only player at `/view.html`, which also loads `?src=<url>`.
+- **Export to Google Sheet / Update Google Sheet:** see below.
+
+### Google Sheet breakdown
+The export adds the shot and asset breakdown as a new tab in a Sheet the user picks (or
+creates) in their Drive, with the Sheet link shown right away and pictures filled in
+afterwards:
+
+1. The text, layout, column widths and row heights are written in one batch.
+2. Each row's thumbnail is uploaded to a "Mushy Edit thumbnails" Drive folder (shared by
+   link once) and `=IMAGE()` formulas are written into the picture cells.
+3. A centrally deployed Apps Script (`apps-script/embed/`, called through `scripts.run`
+   with the user's token) swaps those formulas for in-cell images, and the temporary
+   Drive files are then deleted. If embedding fails the links stay and a notice says so;
+   if picture upload fails the Sheet stays text-only.
+
+**Update Google Sheet** re-exports to the same tab (the spreadsheet and tab ids are saved in
+the work file). It matches rows by Name, refreshes the picture and Length only (Shot, Notes
+and task values are untouched), appends new shots, and flags shots no longer in the
+storyboard in red as "[not in latest]" while keeping their last picture.
+
+Scopes are `drive.file` and `spreadsheets`.
+
+## Sign-in for Sheets
+
+Google access goes through `public/google-connect.html`, which has to run without
+cross-origin isolation (the editor's isolation headers would sever the sign-in popup).
+Behind the dashboard it first calls `GET /api/auth/google/mushy-sheets-token` to reuse the
+Hornet session silently: a 200 returns a token with no Google interaction, a 409 redirects
+once through `/api/auth/google/mushy-sheets-connect` for a one-time consent whose refresh
+token the dashboard stores, and a 401 redirects to `/login`. Anywhere else (standalone
+Vercel, local) it falls back to a "Continue with Google" button. Only choosing a Sheet
+with Google's Picker opens a window; "Use current Sheet" and "Create new" do not.
+
+## Keyboard
+
+`Space` play/pause, `Left/Right` board, `Alt+Left/Right` shot, `Cmd/Ctrl+Left/Right` start or
+end, `Shift+Left/Right` extend selection, `Up/Down` retime selected (Shift = 2x reach),
+`h` hide/show, `p` pin, `c` cut/merge, `+`/`-` zoom, `Cmd/Ctrl+Z` undo, `Esc` closes a
+modal, leaves annotate mode or clears the selection. The mp4 button shows a badge reporting
+whether the page is cross-origin isolated ("isolated, mp4 ready").
+
+## Development
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173  (editor)
-                   # http://localhost:5173/view.html  (viewer)
+npm run dev       # http://localhost:5173 (editor), /view.html (viewer)
+npm run build     # outputs dist/
+npm run preview   # serves the build with the isolation headers
+npm run deploy    # build, then wrangler deploy
 ```
 
-`npm run build` outputs `dist/`; `npm run preview` serves the build with the
-isolation headers so you can test mp4 export locally before deploying.
+- Vite with vanilla JavaScript; dependencies are `@ffmpeg/ffmpeg` 0.12.10, `@ffmpeg/util`
+  0.12.1 and `jszip`. mp4 export uses the single-thread `@ffmpeg/core` 0.12.6 loaded from
+  unpkg; the multithread core fails at run time with this wrapper version.
+- `src/core/` holds the model (timing, shots, retiming, history) and frame ingest;
+  `src/editor/` the editor UI; `src/io/` work files, audio, mp4, viewer and Google Sheets;
+  `src/viewer/` the viewer.
+- ffmpeg.wasm needs `SharedArrayBuffer`, so every page except `google-connect.html` is
+  served with `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: require-corp` (in `vercel.json`, `worker.js` and the
+  dev server).
+- For the dashboard deploy, `vite.config.js` sets `base` to `/mushy-edit/` for builds, so
+  any code that opens another page must use a relative path.
 
-## Deploy: GitHub + Vercel (same flow as the GIF Maker)
+## Deployment
 
-### 1. Create the repo and push
+`worker.js` (Worker `hornet-mushy-edit`) strips the `/mushy-edit` prefix, serves `dist/`, redirects
+a bare `/mushy-edit` to add the trailing slash, and applies the isolation headers to everything
+except `/google-connect.html` and `/google-connect`. It has no routes; it is reached only
+through the dashboard's `MUSHY_EDIT` service binding.
 
-From this folder:
-
-```bash
-git init
-git add .
-git commit -m "Mushy Edit step 1: scaffold + timeline + isolation headers"
-```
-
-Create an empty repo on GitHub (no README/gitignore — this folder has them),
-then:
-
-```bash
-git branch -M main
-git remote add origin https://github.com/<you>/mushy-edit.git
-git push -u origin main
-```
-
-### 2. Import into Vercel
-
-1. vercel.com → **Add New… → Project** → import the `mushy-edit` repo.
-2. Framework preset: **Vite** (auto-detected). Build command `npm run build`,
-   output dir `dist` — both default, leave them.
-3. **Deploy.** First build takes ~1 min.
-
-### 3. Verify isolation (this is the mp4-critical bit)
-
-Open the deployed URL. The header badge should read **"isolated ✓ mp4 ready"**.
-If it says "not isolated", the COOP/COEP headers aren't reaching the browser —
-check that `vercel.json` is at the repo root and redeploy. You can confirm in
-DevTools → Network → the document response should carry
-`Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp`.
-
-### 4. The viewer
-
-The read-only viewer is the same deployment at `/view.html`. Once step 4 lands,
-you'll share either a viewer-JSON file or a link, and reviewers open it there —
-no editing, no export.
-
-## Project layout
-
-```
-index.html            editor entry
-view.html             viewer entry
-vercel.json           COOP/COEP headers (required for ffmpeg.wasm)
-vite.config.js        two entries + dev-server isolation headers
-src/
-  core/    model.js (state, timing, fps math), frames.js (ingest)
-  editor/  main.js (load, timeline, preview) — grows into the full editor
-  viewer/  main.js (read-only player — step 4)
-  io/      workfile / viewer-json / mp4 / audio — steps 2–4
-  estimation/  Google-Sheet export (ported next)
-  style.css
-```
+- Push to `main` runs `.github/workflows/deploy-cloudflare.yml`.
+- Push to `preview` runs `.github/workflows/preview.yml`, deploying
+  `hornet-mushy-edit-preview`.
+- Both need the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` Actions secrets.
+- The Google OAuth client id, Picker API key, app id and Apps Script deployment id are
+  non-secret constants in `src/io/googleSheets.js`. Serving from a new origin requires adding
+  it to the OAuth client's authorized JavaScript origins and the API key's website
+  restrictions.
