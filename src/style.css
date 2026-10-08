@@ -44,7 +44,7 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
-body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;display:flex;flex-direction:column;min-height:100vh}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;display:flex;flex-direction:column;min-height:100vh;font-variant-numeric:tabular-nums}
 .hidden{display:none !important}
 
 header{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -74,14 +74,17 @@ main{flex:1;display:flex;flex-direction:column;min-height:0}
 #tlRuler{position:absolute;top:0;left:0;height:24px;display:block}
 .slot{position:absolute;top:26px;height:74px;background:#000;border:1px solid var(--line);border-radius:2px;overflow:hidden;user-select:none}
 .slot .stripe{height:12px;width:100%;display:flex;align-items:center;overflow:hidden;cursor:default}
-/* Two alternating shot-stripe bands — Sky and Jade, both in-palette, kept
-   as two distinct hues since --cut/--head now share one value (see :root)
-   and would otherwise make c0/c1 indistinguishable. */
-.slot.c0 .stripe{background:rgba(0,187,244,.55)} .slot.c1 .stripe{background:rgba(7,186,86,.5)}
+/* Two alternating shot-stripe bands — Sky and Sand Dune, both in-palette.
+   Not Jade: that's --good, the pinned-board color, and a Jade stripe made
+   pinned boards hard to tell apart in every other shot. */
+.slot.c0 .stripe{background:rgba(0,187,244,.55)} .slot.c1 .stripe{background:rgba(234,221,199,.45)}
 .slot .stripe span{font-family:var(--mono);font-size:9px;color:#fff;padding:0 4px;white-space:nowrap}
 .slot canvas.bimg{height:60px;width:auto;display:block;opacity:.92;cursor:move;touch-action:none}
-.slot.active{border-color:var(--cut);box-shadow:0 0 0 1px var(--cut);z-index:2}
 .slot.selected{border-color:var(--head);box-shadow:0 0 0 1px var(--head)}
+/* Current board: white, not --cut — --cut and --head are both Sky now, so a
+   --cut outline was indistinguishable from "selected". Declared after
+   .selected so the current board still stands out inside a multi-selection. */
+.slot.active{border-color:var(--text);box-shadow:0 0 0 1px var(--text);z-index:2}
 .slot.dragging{z-index:6;box-shadow:0 0 0 2px var(--head)}
 .slot.pinned{border-color:var(--good);box-shadow:inset 0 0 0 1px var(--good)}
 .slot.pinned::after{content:'';position:absolute;inset:0;background:rgba(7,186,86,.16);pointer-events:none}
@@ -177,6 +180,11 @@ header .sep{width:1px;height:18px;background:var(--line);margin:0 2px}
 .board-cell.sel .board{border:2px solid var(--head)}
 .board-cell.off .board{opacity:.35;filter:grayscale(1)}
 .board-row{display:flex;align-items:center;gap:4px}
+.mini{background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:3px;cursor:pointer}
+.mini:hover{border-color:var(--muted);color:var(--text)}
+.mini:disabled{opacity:.4;cursor:not-allowed}
+.mini.danger{color:var(--danger)}
+.mini.danger:hover{border-color:var(--danger);color:var(--danger)}
 .board-row .mini{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-family:var(--mono);font-size:9px;padding:2px 3px;border-radius:3px;cursor:pointer}
 .board-row .mini:hover{border-color:var(--muted);color:var(--text)}
 .board-row .wt{width:42px;text-align:center;font-size:11px}
@@ -388,6 +396,9 @@ table.sheet tr.dis{opacity:.5}
 [data-brand=classic] header h1 .dot{color:var(--cut)}
 [data-brand=classic] .preview,[data-brand=classic] .timeline-scroll{background:#0e1013}
 [data-brand=classic] .viewer-screen{background:#0a0b0d}
+[data-brand=classic] .slot.active{border-color:var(--cut);box-shadow:0 0 0 1px var(--cut)}
+[data-brand=classic] .slot.selected{border-color:var(--head);box-shadow:0 0 0 1px var(--head)}
+[data-brand=classic] .slot.pinned{border-color:var(--good);box-shadow:inset 0 0 0 1px var(--good)}
 [data-brand=classic] .slot.c0 .stripe{background:rgba(78,168,222,.55)}
 [data-brand=classic] .slot.c1 .stripe{background:rgba(255,138,61,.5)}
 [data-brand=classic] .slot.pinned::after{background:rgba(108,192,112,.16)}

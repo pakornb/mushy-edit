@@ -57,10 +57,14 @@ brand's 8-color palette and PP Neue Montreal (fonts/logo copied into
   3 accents + Sand Dune; the guide's own suggested functional mapping (info/
   primary → Sky, success → Jade, warning → Sand Dune, danger → Fuchsia) covers
   exactly 4 roles, so the old 5th "primary CTA / cut-marker" hue got folded into
-  the primary/active role instead of introducing an off-palette color. The one
-  place this mattered functionally — `.slot.c0`/`.c1`'s two alternating shot-
-  stripe colors, previously the old head-blue/cut-orange — now use Sky and Jade
-  directly so the two bands stay visually distinct.
+  the primary/active role instead of introducing an off-palette color. Two places
+  this mattered functionally: `.slot.c0`/`.c1`'s alternating shot-stripe colors
+  use Sky and **Sand Dune** (not Jade — Jade is `--good`, the pinned color, and
+  made pinned boards hard to spot), and the **current board** (`.slot.active`)
+  is outlined in white, declared after `.slot.selected`, since a `--cut`
+  outline looked identical to "selected".
+- **Digits are tabular** (`font-variant-numeric:tabular-nums` on `body`; PP Neue
+  Montreal has `tnum`) so the clock and counters don't jitter during playback.
 - **`--danger` is new**, Hot Fuchsia, used only by `.btn.ghost.sm.danger` — the
   one genuinely destructive-action button. Everything else that used to share
   `--cut`'s orange (the "off"/disabled state, cut-tags, the primary button, the

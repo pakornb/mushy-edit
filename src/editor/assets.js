@@ -218,7 +218,7 @@ function renderAssets(body) {
     ch.innerHTML = `<span class="cat-name">${escapeHtml(cat)}</span>`;
     const addA = el('button', 'btn ghost sm'); addA.textContent = '+ asset';
     addA.onclick = () => { mutate(() => addAsset(P, cat)); renderAssets(body); };
-    const rmC = el('button', 'mini'); rmC.textContent = 'remove category'; rmC.onclick = () => { if (confirm(`Remove category "${cat}" and its assets?`)) { mutate(() => removeAssetCat(P, cat)); renderAssets(body); } };
+    const rmC = el('button', 'mini danger'); rmC.textContent = 'remove category'; rmC.onclick = () => { if (confirm(`Remove category "${cat}" and its assets?`)) { mutate(() => removeAssetCat(P, cat)); renderAssets(body); } };
     ch.append(addA, rmC); sec.appendChild(ch);
 
     const items = assetsByCat(P, cat);
@@ -265,7 +265,7 @@ function assetRow(a, body) {
   });
   row.appendChild(tvs);
 
-  const del = el('button', 'mini'); del.textContent = '🗑'; del.title = 'delete asset';
+  const del = el('button', 'mini danger'); del.textContent = '🗑'; del.title = 'delete asset';
   del.onclick = () => { mutate(() => removeAsset(P, a.id)); renderAssets(body); };
   row.appendChild(del);
   return row;

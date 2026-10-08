@@ -18,6 +18,7 @@ import { openConnect, ensureToken } from '../io/googleSheets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
 import { exportEdlZip } from '../io/edl.js';
+import { exportFcpxml } from '../io/nle.js';
 
 const $ = (id) => document.getElementById(id);
 let cur = 0, lastShot = -1, pps = null;
@@ -146,6 +147,9 @@ function onLoaded() {
   $('assetsBtn').disabled = false;
   $('exportBtn').disabled = false;
   transport.mountAudio(); syncAudioUI(); render(); layoutPreview();
+  // afterLoad() reset previewFi, so nothing has painted the canvas or the
+  // clock for this project yet — seeking runs onTick(), which does both.
+  transport.seek(boardStartSec(cur));
 }
 
 // Keyed by frame NAME, not array index — insert/reorder change which frame
@@ -729,6 +733,11 @@ function wire() {
     $('exportMenu').classList.add('hidden');
     try { overlay('Building viewer…'); await exportViewer(); toast('Viewer JSON exported — open in view.html'); }
     catch (e) { console.error(e); toast('Viewer export failed'); } finally { overlay(false); }
+  };
+  $('mFcpxml').onclick = () => {
+    $('exportMenu').classList.add('hidden');
+    try { exportFcpxml(); toast('FCPXML downloaded — relink to the original image folder in your NLE'); }
+    catch (e) { console.error(e); toast(e.message || 'FCPXML export failed'); }
   };
   $('mEdl').onclick = async () => {
     $('exportMenu').classList.add('hidden');
