@@ -70,6 +70,14 @@ audio and all state. **Open** restores it.
   muxed at its slip offset.
 - **Export review viewer:** a viewer JSON (thumbnails, timing, annotations, audio) that
   opens in the read-only player at `/view.html`, which also loads `?src=<url>`.
+- **Hand off to an editing app** (no plug-ins; audio included, placed at its slip offset;
+  gain and fades are not carried over):
+  - **FCPXML** for Resolve / Final Cut. Import it, then relink to the image folder.
+  - **Premiere Pro XML** (FCP7 XML). File › Import, then Link Media to the image folder.
+  - **After Effects:** a zip with a `.jsx` script plus the images and audio. Unzip, then
+    File › Scripts › Run Script File and pick the script; it builds the comp (with each
+    board's fit mode) from the files next to it. Native `.aep`/`.prproj` files aren't
+    written: both are undocumented formats.
 - **Export to Google Sheet / Update Google Sheet:** see below (Hornet build). The
   standalone build instead has **Download breakdown JSON** and **Copy Apps Script**: paste
   the script into a Sheet's Extensions → Apps Script once, then import the JSON from the

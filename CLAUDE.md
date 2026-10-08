@@ -150,6 +150,8 @@ just `npm install && npm run build` in place. Always run a build before committi
 - `src/io/audio.js` — decode audio → waveform peaks; keeps the original `blob` (used by mp4 + viewer).
 - `src/io/mp4.js` — **ffmpeg.wasm** mp4 export (see note). Draft (`maxW:960`) vs final.
 - `src/io/viewer.js` — builds/export the viewer JSON (thumbnails + timing + annos + audio).
+- `src/io/nle.js` — NLE handoff: FCPXML (Resolve/FCP), FCP7 XML (Premiere), After Effects
+  `.jsx` + media zip. Shared `frameCounts()` (whole-frame math) and `audioPlacement()`.
 - `src/viewer/main.js` + `view.html` — the read-only review player (loads a viewer JSON;
   `?src=<url>` also works).
 - `src/io/googleSheets.js` — Google Sheets export: sign-in handoff, Drive thumbnail uploads, one-batch
@@ -412,34 +414,36 @@ just `npm install && npm run build` in place. Always run a build before committi
      right edge. Must be redrawn (`layoutAudioClip()`, not just repositioning the clip `<div>`)
      on every offset change, including mid-drag — see the gotcha below.
    - UI lives in the audio lane (`index.html`): a gain slider + two frame-count number inputs.
-4. **EDL export. DONE** (as a **zip package**, not a bare `.edl` file — deliberately, so it's
-   self-contained/relinkable without hunting down the original images separately). `src/io/edl.js`
-   `buildEdl()` writes CMX3600 text (one `V` event per enabled board — still images have no real
-   source timecode, so source is always `00:00:00:00` → its own duration; `* FROM CLIP NAME:`
-   carries the real filename since the 8-char reel field can't; one `A` event for the audio clip
-   if present, reusing `offsetSec`/`duration` for its record range). `exportEdlZip()` bundles that
-   `.edl` with every enabled board's full-res source image (under its original filename, so the
-   EDL's clip-name comments and the zip contents line up) and the audio file, via JSZip (already a
-   dependency). Reuses `nle.js`'s `frameCounts()` (now exported) for the same drift-free whole-frame
-   math the FCPXML export already relies on. **Not validated against a real NLE import**, same
-   caveat as FCPXML below — only checked for well-formed output and correct frame math.
-5. **Step 5 — NLE handoff (EDL + FCPXML):** export the cut so an editor can rebuild the animatic
-   in Resolve/Premiere. FCPXML should reference the **full-res source images** at each board's
-   duration; EDL is the simpler timing list. Neither embeds images (they reference by name/path) —
-   contrast with item 4 above, which is a *separate*, self-contained zip export, not this one.
-   - **FCPXML: DONE** — `src/io/nle.js` `buildFcpxml()`/`exportFcpxml()`, wired into
-     Export ▾ → "Export FCPXML (NLE handoff)…". Targets FCPXML 1.9 (broadest common
-     Resolve/Premiere support). References images by **bare filename only** (no path) — the
-     editor relinks to the original image folder on import, since the app never has a real
-     filesystem path (images are in-memory blobs). Frame math: per-board start/length are
-     summed as whole frames (`Math.round(len*fps)`, accumulated as integers) so there's no
-     rounding drift between the export and the app's own timeline — checked in isolation
-     against a mock project (disabled-board exclusion, rounding, XML escaping all correct),
-     but **not yet validated against a real Resolve/Premiere import** — if either app rejects
-     something on first real test, that's the place to look.
-   - **EDL (this exact format, bare file, no zip): not started** — item 4 above covers the
-     zip-packaged version that was actually asked for; a bare `.edl` export (no bundled images)
-     would be a small addition to `edl.js` if ever needed on its own.
+4. **EDL export: REMOVED (2026-10-08)** — the zip-packaged CMX3600 export didn't import in
+   Resolve, so the menu item and `src/io/edl.js` were dropped. It's in git history (last present
+   in commit `32667d0`) if it's ever revisited; FCPXML/Premiere XML cover the same handoff.
+5. **NLE handoff — `src/io/nle.js`, all native imports, no plug-ins.** Images and audio are
+   referenced by **bare filename** (the app has no filesystem paths — boards are in-memory
+   blobs), except After Effects, which ships the media with it.
+   - **FCPXML 1.9** (`buildFcpxml`) — Export ▾ → "Export FCPXML (Resolve / Final Cut)…".
+     **Verified in Resolve** (user, 2026-10-08) for the video; audio added afterwards as a
+     connected clip (`lane="-1"`) on whichever board is on screen when the audio starts —
+     a connected clip's `offset` is in its parent's local time, so it's `rec - parent.startFrame`.
+     The audio part is not yet confirmed in Resolve.
+   - **Premiere Pro: FCP7 XML / xmeml v4** (`buildPremiereXml`) — "Export Premiere Pro XML…".
+     Premiere's own File › Import reads it; media comes in offline → Link Media. **Not validated
+     in Premiere** (no Adobe apps on the dev machine) — only well-formed + frame math checked.
+   - **After Effects: ExtendScript** (`buildAeScript`/`exportAeZip`) — "Export After Effects
+     (script + media zip)…". Zip = `<base>_AfterEffects.jsx` + every visible board's full-res
+     image + the audio. Run via File › Scripts › Run Script File; it finds media next to itself
+     (`File($.fileName).parent`), else asks for a folder; builds a comp at `resW×resH`/fps, one
+     still layer per board with the board's **fit mode** applied as layer scale (same math as
+     `fitRect`), audio layer at the slip offset. **The script must stay ES3** (ExtendScript: no
+     `let`/`const`/arrows/template literals/`JSON`) — the cut is embedded as a JSON literal with
+     non-ASCII `\u`-escaped so file encoding can't mangle filenames. **Not validated in AE.**
+   - **Native `.aep`/`.prproj`: deliberately not written.** `.aep` is an undocumented binary
+     (RIFX); `.prproj` is undocumented gzipped XML that changes between Premiere versions.
+     The XML/script routes above are what both apps support for interchange.
+   - **Audio placement** (`audioPlacement`) matches `mp4.js` exactly: positive `offsetSec`
+     delays the clip, negative trims its head, capped at the video's end. **Gain and fades are
+     not exported** to any NLE yet (mp4/viewer only) — a possible follow-on (FCPXML
+     `adjust-volume`, xmeml audio-levels filter, AE `Audio Levels` keyframes).
+   - Annotations aren't exported to NLEs either (they're vector data; only mp4/viewer bake them).
 6. Ongoing **feel-tuning** constants: `SEC_PER_PX` drag sensitivity (~0.012), default falloff
    reach/curve, horizontal-offset mushiness. These are "play with real boards and adjust", not spec.
 7. **UI clarity pass on the Boards/Shots property panels** (inspector.js) — noted for later, NOT

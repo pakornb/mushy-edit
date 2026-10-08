@@ -17,8 +17,7 @@ import { openAssetWindow, openPreview, exportBreakdownJSON, exportToGoogleSheet,
 import { openConnect, ensureToken } from '../io/googleSheets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
-import { exportEdlZip } from '../io/edl.js';
-import { exportFcpxml } from '../io/nle.js';
+import { exportFcpxml, exportPremiereXml, exportAeZip } from '../io/nle.js';
 
 const $ = (id) => document.getElementById(id);
 let cur = 0, lastShot = -1, pps = null;
@@ -736,13 +735,18 @@ function wire() {
   };
   $('mFcpxml').onclick = () => {
     $('exportMenu').classList.add('hidden');
-    try { exportFcpxml(); toast('FCPXML downloaded — relink to the original image folder in your NLE'); }
+    try { exportFcpxml(); toast('FCPXML downloaded — relink to your image folder on import'); }
     catch (e) { console.error(e); toast(e.message || 'FCPXML export failed'); }
   };
-  $('mEdl').onclick = async () => {
+  $('mPremiere').onclick = () => {
     $('exportMenu').classList.add('hidden');
-    try { await exportEdlZip((msg) => overlay(msg)); toast('EDL package downloaded'); }
-    catch (e) { console.error(e); toast(e.message || 'EDL export failed'); } finally { overlay(false); }
+    try { exportPremiereXml(); toast('Premiere XML downloaded — File › Import, then Link Media to your image folder'); }
+    catch (e) { console.error(e); toast(e.message || 'Premiere export failed'); }
+  };
+  $('mAfterEffects').onclick = async () => {
+    $('exportMenu').classList.add('hidden');
+    try { await exportAeZip((msg) => overlay(msg)); toast('After Effects zip downloaded — unzip, then File › Scripts › Run Script File'); }
+    catch (e) { console.error(e); toast(e.message || 'After Effects export failed'); } finally { overlay(false); }
   };
   $('autoBtn').onclick = () => { mutate(() => { const r = autoEstimate(P); toast(`Estimated ${r.filled} boards → ${fmtClock(r.total)}`); }); render(); };
   $('rebalBtn').onclick = () => { mutate(() => { const r = rebalance(P); toast(`Rebalanced → ${fmtClock(r.total)}`); }); render(); };
