@@ -16,6 +16,16 @@ When in doubt, keep the tool on the timing/review/handoff side of that line.
   `hornet-animation/tools-dashboard` gateway at `tools.hellohornet.com/mushy-edit/`
   (`wrangler.jsonc` + `worker.js`) — see "Cloudflare / tools-dashboard deploy" below.
 - `npm install` then `npm run dev` (local) / `npm run build` (prod, outputs `dist/`).
+- **Two build targets, one codebase — `VITE_TARGET`** (see README "Build targets"):
+  unset = **standalone/Vercel** (original look, legacy breakdown-JSON + Apps Script export,
+  `base:'/'`); `hornet` = **dashboard/Cloudflare** (brand kit, direct Sheets export,
+  `base:'/mushy-edit/'`) — `npm run build:hornet` / `dev:hornet`, used by both Cloudflare
+  workflows and `npm run deploy`. Mechanism: `__HORNET__` define in `main.js`
+  (`wireGoogleSheets()` vs `wireLegacySheets()`); `data-only="hornet|standalone"` lines in
+  the HTML, filtered by the `brandHtml` plugin in `vite.config.js`; `<html data-brand=classic>`
+  + the final block of `style.css` for the old palette. **Keep both targets building** — check
+  `npm run build` AND `npm run build:hornet` before committing. The same `main` is pushed to
+  both `origin` (pakornb) and `hornet` (hornet-animation); don't fork the code per repo.
 - Two entry points: `index.html` (editor) and `view.html` (read-only viewer). See `vite.config.js`.
 - **COOP/COEP headers** are set in `vercel.json` and `worker.js` (Cloudflare) and the dev
   server (required so `crossOriginIsolated` is true for ffmpeg.wasm) — on every page
@@ -79,8 +89,8 @@ proxies `/mushy-edit/*` to this repo's own Cloudflare Worker (service binding
 `MUSHY_EDIT` → Worker `hornet-mushy-edit`) after its own Google-SSO gate. That
 gateway is what turns this into the "sign in with a Hornet account, no local
 setup" tool the Google Sheets export was built for.
-- **`vite.config.js`'s `base`** is `/mushy-edit/` for `vite build` (the dev
-  server stays at `/`) — Vite bakes that prefix into every built HTML's
+- **`vite.config.js`'s `base`** is `/mushy-edit/` for `VITE_TARGET=hornet vite build`
+  (the dev server and the standalone build stay at `/`) — Vite bakes that prefix into every built HTML's
   asset URLs, or the browser would request `/assets/...` from site root and
   miss the dashboard's proxy route entirely.
 - **`worker.js`** strips the `/mushy-edit` prefix and forwards to the
@@ -195,7 +205,10 @@ just `npm install && npm run build` in place. Always run a build before committi
   offset (`-itsoffset` for +, `-ss` for −), capped with `-t total`.
 
 ## Google Sheet export
-- **Google Sheets export ("Export to Google Sheet…" / "Update Google Sheet") — the only path.**
+- **Standalone build:** the legacy path below ("Removed (2026-09-28)") is restored for the
+  standalone/Vercel target only — `exportBreakdownJSON` (assets.js), `src/io/appsScript.js`,
+  "Download breakdown JSON" + "Copy Apps Script". Everything below this bullet is the Hornet build.
+- **Google Sheets export ("Export to Google Sheet…" / "Update Google Sheet") — Hornet build.**
   No per-user Apps Script setup. `src/io/googleSheets.js` + `public/google-connect.html`. The user
   signs in, picks any Sheet in their Drive with Google's Picker (or creates one), and the breakdown
   is added as a new tab. The text/layout `batchUpdate` (headers, values, column widths, row heights

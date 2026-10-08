@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:hornet": "VITE_TARGET=hornet vite build",
+    "dev:hornet": "VITE_TARGET=hornet vite",
     "preview": "vite preview",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build:hornet && wrangler deploy"
   },
   "devDependencies": {
     "vite": "^5.4.0",

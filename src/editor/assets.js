@@ -69,6 +69,16 @@ export async function buildBreakdownData(withThumbs = true) {
   return { kind: 'breakdown', lenUnit: P.lenUnit, fps: P.fps, shotTasks: P.shotTasks, assetTasks: P.assetTasks, assetCats: P.assetCats, shots, assets };
 }
 
+// Standalone build only (the Hornet build exports straight to Sheets below):
+// the breakdown as a JSON file, imported into a Sheet by src/io/appsScript.js.
+export async function exportBreakdownJSON() {
+  const data = await buildBreakdownData(true);
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `${P.baseName}_breakdown.json`;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 // ---------- Google Sheets export ----------
 // Build a new breakdown tab in a Sheet the user picks (or creates) in their
 // own Drive, or update the tab this project exported to last time. `connect`

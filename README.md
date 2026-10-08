@@ -6,7 +6,8 @@ handoff; it is deliberately not a compositing editor, so there is no per-image
 move, scale, rotate or crop. Framing is controlled with fit modes.
 
 It is served inside the Hornet Tools Dashboard at `/mushy-edit/`. It also deploys
-standalone to Vercel (`vercel.json`).
+standalone to Vercel (`vercel.json`). The two are one codebase built for two targets; see
+[Build targets](#build-targets).
 
 ## What it does
 
@@ -69,7 +70,10 @@ audio and all state. **Open** restores it.
   muxed at its slip offset.
 - **Export review viewer:** a viewer JSON (thumbnails, timing, annotations, audio) that
   opens in the read-only player at `/view.html`, which also loads `?src=<url>`.
-- **Export to Google Sheet / Update Google Sheet:** see below.
+- **Export to Google Sheet / Update Google Sheet:** see below (Hornet build). The
+  standalone build instead has **Download breakdown JSON** and **Copy Apps Script**: paste
+  the script into a Sheet's Extensions → Apps Script once, then import the JSON from the
+  "Sequence Breakdown" menu it adds.
 
 ### Google Sheet breakdown
 The export adds the shot and asset breakdown as a new tab in a Sheet the user picks (or
@@ -115,9 +119,11 @@ whether the page is cross-origin isolated ("isolated, mp4 ready").
 ```bash
 npm install
 npm run dev       # http://localhost:5173 (editor), /view.html (viewer)
-npm run build     # outputs dist/
+npm run build     # standalone build (Vercel), outputs dist/
+npm run build:hornet  # Hornet build (dashboard), outputs dist/
+npm run dev:hornet    # dev server with the Hornet build's look and export
 npm run preview   # serves the build with the isolation headers
-npm run deploy    # build, then wrangler deploy
+npm run deploy    # Hornet build, then wrangler deploy
 ```
 
 - Vite with vanilla JavaScript; dependencies are `@ffmpeg/ffmpeg` 0.12.10, `@ffmpeg/util`
@@ -130,8 +136,24 @@ npm run deploy    # build, then wrangler deploy
   served with `Cross-Origin-Opener-Policy: same-origin` and
   `Cross-Origin-Embedder-Policy: require-corp` (in `vercel.json`, `worker.js` and the
   dev server).
-- For the dashboard deploy, `vite.config.js` sets `base` to `/mushy-edit/` for builds, so
-  any code that opens another page must use a relative path.
+- For the dashboard deploy, `vite.config.js` sets `base` to `/mushy-edit/` for Hornet
+  builds, so any code that opens another page must use a relative path.
+
+### Build targets
+
+`VITE_TARGET` picks the target at build time:
+
+| | `VITE_TARGET=hornet` (dashboard) | unset (standalone, Vercel) |
+|---|---|---|
+| Look | Hornet brand kit | original palette, no logo |
+| Sheet export | direct Google Sheets export | breakdown JSON + Apps Script (`src/io/appsScript.js`) |
+| `base` | `/mushy-edit/` | `/` |
+
+Everything else is shared. `main.js` branches on the `__HORNET__` constant; in
+`index.html`/`view.html`, a line tagged `data-only="hornet"` or `data-only="standalone"` is
+kept only in that build; and the standalone build sets `<html data-brand="classic">`, which
+`src/style.css` uses to restore the original palette in its final block. A new rule that
+hardcodes a brand color needs its classic value added there too.
 
 ## Deployment
 
@@ -140,7 +162,9 @@ a bare `/mushy-edit` to add the trailing slash, and applies the isolation header
 except `/google-connect.html` and `/google-connect`. It has no routes; it is reached only
 through the dashboard's `MUSHY_EDIT` service binding.
 
-- Push to `main` runs `.github/workflows/deploy-cloudflare.yml`.
+- Push to `main` runs `.github/workflows/deploy-cloudflare.yml` (Hornet build). Both
+  workflows run only in `hornet-animation/mushy-edit`, so the standalone copy doesn't try to
+  deploy to Cloudflare.
 - Push to `preview` runs `.github/workflows/preview.yml`, deploying
   `hornet-mushy-edit-preview`.
 - Both need the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` Actions secrets.

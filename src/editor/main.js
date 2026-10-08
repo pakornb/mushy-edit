@@ -12,7 +12,8 @@ import { loadAudioFile, drawWaveform } from '../io/audio.js';
 import { renderInspector } from './inspector.js';
 import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture, cancelGesture } from '../core/history.js';
-import { openAssetWindow, openPreview, exportToGoogleSheet, updateGoogleSheet, chooseSheetDestination, showSheetResult, setRefresh, closeModal, modal } from './assets.js';
+import { APPS_SCRIPT } from '../io/appsScript.js';
+import { openAssetWindow, openPreview, exportBreakdownJSON, exportToGoogleSheet, updateGoogleSheet, chooseSheetDestination, showSheetResult, setRefresh, closeModal, modal } from './assets.js';
 import { openConnect, ensureToken } from '../io/googleSheets.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
@@ -720,71 +721,7 @@ function wire() {
   $('exportBtn').onclick = (e) => { e.stopPropagation(); $('exportMenu').classList.toggle('hidden'); };
   document.addEventListener('click', (e) => { if (!e.target.closest('#exportBtn, #exportMenu')) $('exportMenu').classList.add('hidden'); });
   $('mPreview').onclick = () => { $('exportMenu').classList.add('hidden'); openPreview(); };
-  const runSheets = async (task, resultOpts) => {
-    let res;
-    try { res = await task(overlay); }
-    catch (e) {
-      overlay(false);
-      console.error(e);
-      if (e.message === 'Cancelled.') return;
-      if (e.code === 'popup_blocked') { offerReconnect(() => runSheets(task, resultOpts)); return; }
-      toast(e.message || 'Google Sheets export failed');
-      return;
-    }
-    overlay(false);
-    showSheetResult(res, resultOpts);
-    // The Sheet (text + layout) is already usable; pictures upload and embed
-    // entirely in the background from here.
-    const img = await res.images;
-    if (img && img.error) { toast('Sheet is up to date, but pictures failed to upload: ' + img.error); return; }
-    const emb = await res.embedding;
-    if (!emb || !emb.total) return;
-    if (emb.error) toast('Pictures stay as Drive links (embedding failed: ' + emb.error + ')');
-    else toast(`Pictures embedded in the Sheet (${emb.embedded}/${emb.total})`);
-  };
-  // The token fetch that led here ran async (see ensureToken()'s file-header
-  // note), so by the time it found Google sign-in was needed, the click that
-  // started all this is long gone and window.open() gets blocked. This
-  // button click is a fresh one — openConnect() called synchronously inside
-  // it opens the window fine, and success just re-runs the original task,
-  // which now has a cached token and won't need a window at all.
-  function offerReconnect(retry) {
-    modal('Reconnect Google', (body) => {
-      const p = document.createElement('p');
-      p.textContent = 'Your browser blocked the Google sign-in window for this. Click below to open it directly.';
-      const b = document.createElement('button');
-      b.className = 'btn';
-      b.textContent = 'Connect Google';
-      b.onclick = () => {
-        openConnect({ mode: 'signin' }).then(
-          () => { closeModal(false); retry(); },
-          (err) => toast(err.message || 'Still couldn’t connect to Google'),
-        );
-      };
-      body.append(p, b);
-    }, false);
-  }
-  // Attaches a token to an already-made choice (create/use-existing) —
-  // ensureToken() only opens a window for the rare cases it can't avoid
-  // one (see googleSheets.js), so this is usually a plain background fetch.
-  const withToken = async (choice) => ({ ...(await ensureToken()), ...choice });
-  $('mSheetExport').onclick = () => {
-    $('exportMenu').classList.add('hidden');
-    if (!P.shots.length) { toast('Load some boards first'); return; }
-    const current = P.sheetsSpreadsheetId ? { id: P.sheetsSpreadsheetId, name: P.sheetsSpreadsheetName } : null;
-    chooseSheetDestination(current, {
-      // openConnect() opens a window, so it must run synchronously inside
-      // this same click (chooseSheetDestination guarantees that) — anything
-      // awaited first and the browser blocks the popup.
-      onPick: () => runSheets((status) => exportToGoogleSheet(openConnect({ mode: 'pick' }), status)),
-      onChoice: (choice) => runSheets((status) => exportToGoogleSheet(withToken(choice), status), { autoOpen: !!choice.create }),
-    });
-  };
-  $('mSheetUpdate').onclick = () => {
-    $('exportMenu').classList.add('hidden');
-    if (!P.sheetsSpreadsheetId || P.sheetsTabId == null) { toast('Use "Export to Google Sheet…" first'); return; }
-    runSheets((status) => updateGoogleSheet(ensureToken(), status));
-  };
+  if (__HORNET__) wireGoogleSheets(); else wireLegacySheets();
   $('annotateBtn').onclick = toggleAnnotate;
   $('mMp4').onclick = () => { $('exportMenu').classList.add('hidden'); runMp4(0); };
   $('mMp4Draft').onclick = () => { $('exportMenu').classList.add('hidden'); runMp4(960); };
@@ -884,6 +821,87 @@ function wire() {
   });
 
   window.addEventListener('resize', () => { if (P.frames.length) { buildTimeline(); updatePlayhead(transport.sec); layoutAudioClip(); layoutPreview(); } });
+}
+
+// Hornet build: direct Google Sheets export (googleSheets.js) — see CLAUDE.md.
+function wireGoogleSheets() {
+  const runSheets = async (task, resultOpts) => {
+    let res;
+    try { res = await task(overlay); }
+    catch (e) {
+      overlay(false);
+      console.error(e);
+      if (e.message === 'Cancelled.') return;
+      if (e.code === 'popup_blocked') { offerReconnect(() => runSheets(task, resultOpts)); return; }
+      toast(e.message || 'Google Sheets export failed');
+      return;
+    }
+    overlay(false);
+    showSheetResult(res, resultOpts);
+    // The Sheet (text + layout) is already usable; pictures upload and embed
+    // entirely in the background from here.
+    const img = await res.images;
+    if (img && img.error) { toast('Sheet is up to date, but pictures failed to upload: ' + img.error); return; }
+    const emb = await res.embedding;
+    if (!emb || !emb.total) return;
+    if (emb.error) toast('Pictures stay as Drive links (embedding failed: ' + emb.error + ')');
+    else toast(`Pictures embedded in the Sheet (${emb.embedded}/${emb.total})`);
+  };
+  // The token fetch that led here ran async (see ensureToken()'s file-header
+  // note), so by the time it found Google sign-in was needed, the click that
+  // started all this is long gone and window.open() gets blocked. This
+  // button click is a fresh one — openConnect() called synchronously inside
+  // it opens the window fine, and success just re-runs the original task,
+  // which now has a cached token and won't need a window at all.
+  function offerReconnect(retry) {
+    modal('Reconnect Google', (body) => {
+      const p = document.createElement('p');
+      p.textContent = 'Your browser blocked the Google sign-in window for this. Click below to open it directly.';
+      const b = document.createElement('button');
+      b.className = 'btn';
+      b.textContent = 'Connect Google';
+      b.onclick = () => {
+        openConnect({ mode: 'signin' }).then(
+          () => { closeModal(false); retry(); },
+          (err) => toast(err.message || 'Still couldn’t connect to Google'),
+        );
+      };
+      body.append(p, b);
+    }, false);
+  }
+  // Attaches a token to an already-made choice (create/use-existing) —
+  // ensureToken() only opens a window for the rare cases it can't avoid
+  // one (see googleSheets.js), so this is usually a plain background fetch.
+  const withToken = async (choice) => ({ ...(await ensureToken()), ...choice });
+  $('mSheetExport').onclick = () => {
+    $('exportMenu').classList.add('hidden');
+    if (!P.shots.length) { toast('Load some boards first'); return; }
+    const current = P.sheetsSpreadsheetId ? { id: P.sheetsSpreadsheetId, name: P.sheetsSpreadsheetName } : null;
+    chooseSheetDestination(current, {
+      // openConnect() opens a window, so it must run synchronously inside
+      // this same click (chooseSheetDestination guarantees that) — anything
+      // awaited first and the browser blocks the popup.
+      onPick: () => runSheets((status) => exportToGoogleSheet(openConnect({ mode: 'pick' }), status)),
+      onChoice: (choice) => runSheets((status) => exportToGoogleSheet(withToken(choice), status), { autoOpen: !!choice.create }),
+    });
+  };
+  $('mSheetUpdate').onclick = () => {
+    $('exportMenu').classList.add('hidden');
+    if (!P.sheetsSpreadsheetId || P.sheetsTabId == null) { toast('Use "Export to Google Sheet…" first'); return; }
+    runSheets((status) => updateGoogleSheet(ensureToken(), status));
+  };
+}
+
+// Standalone build: the original export path — download the breakdown JSON,
+// then import it into a Sheet with the Apps Script (src/io/appsScript.js),
+// pasted once per Sheet via "Copy Apps Script".
+function wireLegacySheets() {
+  const copyGs = async () => {
+    try { await navigator.clipboard.writeText(APPS_SCRIPT); toast('Apps Script copied — paste into Sheets → Extensions → Apps Script'); }
+    catch { const ta = document.createElement('textarea'); ta.value = APPS_SCRIPT; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Apps Script copied'); }
+  };
+  $('mJson').onclick = () => { $('exportMenu').classList.add('hidden'); exportBreakdownJSON(); toast('Breakdown JSON downloaded'); };
+  $('mCopyGs').onclick = () => { $('exportMenu').classList.add('hidden'); copyGs(); };
 }
 
 wire();

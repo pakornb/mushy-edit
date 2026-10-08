@@ -369,3 +369,37 @@ table.sheet tr.dis{opacity:.5}
 .modal-frame{width:min(1200px,94vw);height:min(860px,90vh);background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
 .modal-topbar{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--muted)}
 #splitFrame{flex:1;border:none;width:100%;background:var(--bg)}
+
+/* ---- classic (standalone/Vercel) look ----
+   The rules above are the Hornet brand kit (tools-dashboard deploy). The
+   standalone build (VITE_TARGET unset — see vite.config.js) stamps
+   <html data-brand="classic"> and restores the original palette here, so
+   both looks live in one file without forking any rule above. When adding a
+   rule above that hardcodes a brand color, add its classic value here too. */
+:root[data-brand=classic]{
+  --bg:#14161a; --panel:#1c1f26; --panel2:#22262f; --line:#2e333d;
+  --text:#e6e8ec; --muted:#8a929e; --faint:#5b6472;
+  --cut:#ff8a3d; --head:#4ea8de; --good:#6cc070; --warn:#e0a34a;
+  --danger:#ff8a3d;
+  --mono:ui-monospace,'SF Mono','JetBrains Mono',Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+[data-brand=classic] header h1{display:block}
+[data-brand=classic] header h1 .dot{color:var(--cut)}
+[data-brand=classic] .preview,[data-brand=classic] .timeline-scroll{background:#0e1013}
+[data-brand=classic] .viewer-screen{background:#0a0b0d}
+[data-brand=classic] .slot.c0 .stripe{background:rgba(78,168,222,.55)}
+[data-brand=classic] .slot.c1 .stripe{background:rgba(255,138,61,.5)}
+[data-brand=classic] .slot.pinned::after{background:rgba(108,192,112,.16)}
+[data-brand=classic] .marquee{background:rgba(78,168,222,.15)}
+[data-brand=classic] .pin-tag{color:#0c1a0c}
+[data-brand=classic] .tbtn.play,[data-brand=classic] .cut-tag,[data-brand=classic] .btn,
+[data-brand=classic] .tbtn.annobtn.on,[data-brand=classic] .tbtn.sm.annobtn.on{color:#1a1206}
+[data-brand=classic] .btn.ghost{color:var(--text)}
+[data-brand=classic] .anno-tool.on{color:#08131c}
+[data-brand=classic] .canvas-guide{border-color:rgba(138,146,158,.5)}
+[data-brand=classic] #previewCanvas{border-color:rgba(138,146,158,.55)}
+[data-brand=classic] .drop.hot{background:#20232b}
+[data-brand=classic] .overlay{background:rgba(10,12,15,.72)}
+[data-brand=classic] table.sheet th{background:#22262f;color:#e6e8ec}
+[data-brand=classic] .btn.ghost.sm.danger:hover{background:rgba(255,138,61,.12)}
