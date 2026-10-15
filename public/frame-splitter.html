@@ -1744,52 +1744,43 @@
       + '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
   }
 
-  // ---------- grid detection (Otsu + valley search) ----------
+  // ---------- grid detection (background-color mask + gutter search) ----------
   function detectGrid(){
     const rows = Math.max(1, parseInt(rowsInput.value) || 1);
     const cols = Math.max(1, parseInt(colsInput.value) || 1);
     excludedCells = [];
 
-    // sample the content region at full natural resolution via an offscreen canvas
-    const off = document.createElement('canvas');
-    off.width = Math.round(content.w);
-    off.height = Math.round(content.h);
-    const octx = off.getContext('2d');
-    octx.drawImage(img, content.x, content.y, content.w, content.h, 0, 0, off.width, off.height);
-    const data = octx.getImageData(0, 0, off.width, off.height).data;
-    const W = off.width, H = off.height;
-
-    // grayscale + histogram for Otsu
-    const gray = new Uint8ClampedArray(W * H);
-    const hist = new Array(256).fill(0);
-    for (let i = 0, p = 0; i < data.length; i += 4, p++){
-      const g = Math.round(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
-      gray[p] = g;
-      hist[g]++;
-    }
-    const threshold = otsuThreshold(hist, W*H);
-
-    // detect background polarity by sampling border pixels
-    let borderSum = 0, borderCount = 0;
-    for (let x = 0; x < W; x++){ borderSum += gray[x]; borderSum += gray[(H-1)*W + x]; borderCount += 2; }
-    for (let y = 0; y < H; y++){ borderSum += gray[y*W]; borderSum += gray[y*W + (W-1)]; borderCount += 2; }
-    const borderAvg = borderSum / borderCount;
-    const bgIsLight = borderAvg > threshold;
-
-    // ink mask: 1 where "content" (not background)
-    // if bg light -> ink = dark pixels (gray < threshold)
-    // if bg dark  -> ink = light pixels (gray >= threshold)  [treats whole bright panel as content]
+    // row/column density over the content region, read from the full-image mask so the
+    // background color is sampled from the sheet's real outer edge, not the content crop's.
+    // Only LONG ink runs count — vertical runs for the row profile, horizontal for the column
+    // one — so panels (solid fill, or the border lines every row/column of a drawn panel
+    // crosses) register and caption text doesn't. Otherwise a long caption leaves no visible
+    // gap before the next row, and the widest gap is image→caption instead of the gutter.
+    const mask = buildFullMask();
+    const x0 = Math.round(content.x), y0 = Math.round(content.y);
+    const W = Math.min(Math.round(content.w), mask.W - x0), H = Math.min(Math.round(content.h), mask.H - y0);
+    const minRun = Math.max(24, Math.round(0.03 * Math.min(W, H)));
     const rowDensity = new Float64Array(H);
     const colDensity = new Float64Array(W);
-    for (let y = 0; y < H; y++){
-      let rowSum = 0;
-      for (let x = 0; x < W; x++){
-        const g = gray[y*W + x];
-        const isInk = bgIsLight ? (g < threshold) : (g >= threshold);
-        if (isInk) { rowSum++; colDensity[x]++; }
+    for (let x = 0; x < W; x++){
+      for (let y = 0; y < H; ){
+        if (!isInk(mask, x0 + x, y0 + y)){ y++; continue; }
+        let e = y;
+        while (e < H && isInk(mask, x0 + x, y0 + e)) e++;
+        if (e - y >= minRun) for (let k = y; k < e; k++) rowDensity[k]++;
+        y = e;
       }
-      rowDensity[y] = rowSum / W;
     }
+    for (let y = 0; y < H; y++){
+      for (let x = 0; x < W; ){
+        if (!isInk(mask, x0 + x, y0 + y)){ x++; continue; }
+        let e = x;
+        while (e < W && isInk(mask, x0 + e, y0 + y)) e++;
+        if (e - x >= minRun) for (let k = x; k < e; k++) colDensity[k]++;
+        x = e;
+      }
+    }
+    for (let y = 0; y < H; y++) rowDensity[y] /= W;
     for (let x = 0; x < W; x++) colDensity[x] /= H;
 
     const rowSplitsLocal = valleySplits(rowDensity, rows - 1);
@@ -1800,24 +1791,6 @@
 
     renderOverlay();
     syncActionButtons();
-  }
-
-  function otsuThreshold(hist, total){
-    let sum = 0;
-    for (let i = 0; i < 256; i++) sum += i * hist[i];
-    let sumB = 0, wB = 0, wF = 0, maxVar = 0, threshold = 127;
-    for (let t = 0; t < 256; t++){
-      wB += hist[t];
-      if (wB === 0) continue;
-      wF = total - wB;
-      if (wF === 0) break;
-      sumB += t * hist[t];
-      const mB = sumB / wB;
-      const mF = (sum - sumB) / wF;
-      const varBetween = wB * wF * (mB - mF) * (mB - mF);
-      if (varBetween > maxVar) { maxVar = varBetween; threshold = t; }
-    }
-    return threshold;
   }
 
   function valleySplits(density, nSplits, excludeEdgeFrac){
@@ -1840,11 +1813,34 @@
       const expected = Math.floor(L * (idx+1) / (nSplits+1));
       const window = Math.max(4, Math.floor(L / (nSplits+1) / 2));
       const a = Math.max(lo, expected - window), b = Math.min(hi, expected + window);
-      let bestI = a, bestV = Infinity;
-      for (let i = a; i < b; i++){
-        if (smooth[i] < bestV){ bestV = smooth[i]; bestI = i; }
+      // the gutter is the WIDEST run at (near) the window's minimum density, split at its
+      // center — not the first minimum found, which on boards with captions lands in the thin
+      // image→caption gap instead of the real gutter between rows
+      let minV = Infinity;
+      for (let i = a; i < b; i++) if (smooth[i] < minV) minV = smooth[i];
+      const level = minV + 0.002; // tight: a drawn panel's own side borders alone are ~0.005
+      // A run may extend past the window (its center is the real gutter middle), but it's
+      // scored only by the part INSIDE this window, and must land after the previous split —
+      // else one very tall gutter (e.g. below a row of long captions) wins two windows and
+      // stacks two split lines on the same spot, leaving a zero-height row.
+      const prev = splits.length ? splits[splits.length - 1] : -1;
+      let bestLo = -1, bestHi = -1, bestScore = -1, i = a;
+      while (i < b){
+        if (smooth[i] > level){ i++; continue; }
+        let s0 = i, s1 = i;
+        while (s0 > lo && smooth[s0-1] <= level) s0--;
+        while (s1 < hi-1 && smooth[s1+1] <= level) s1++;
+        const center = Math.round((s0 + s1) / 2);
+        const score = Math.min(s1, b - 1) - Math.max(s0, a);
+        if (center > prev && score > bestScore){ bestScore = score; bestLo = s0; bestHi = s1; }
+        i = Math.max(i, s1) + 1;
       }
-      splits.push(bestI);
+      if (bestScore < 0){ // no usable gutter: plain minimum after the previous split
+        let m = Math.max(a, prev + 1);
+        for (let j = m; j < b; j++) if (smooth[j] < smooth[m]) m = j;
+        bestLo = bestHi = m;
+      }
+      splits.push(Math.round((bestLo + bestHi) / 2));
     }
     return splits;
   }
@@ -1920,7 +1916,13 @@
   insetInput.addEventListener('change', () => { if (trimRects.length) { applyTrim(); pushHistory(); } });
   borderSnapToggle.addEventListener('change', () => { if (trimRects.length) { applyTrim(); pushHistory(); } });
 
-  // ---------- full-resolution ink mask (shared by grid trim + manual smart features) ----------
+  // ---------- full-resolution ink mask (shared by grid split, grid trim + manual smart features) ----------
+  // Background = the median color of the image's outer edge (the paper/gutters); a pixel is
+  // "ink" if any channel differs from it by more than BG_TOLERANCE. This replaced an Otsu
+  // light/dark split, which also counted every light area INSIDE a panel (clouds, white
+  // product, pale sky) as background — on full-color boards that riddled each panel with holes
+  // leaking into the gutters, so neither the grid split nor the per-cell trim found the edges.
+  const BG_TOLERANCE = 28;
   function buildFullMask(){
     if (fullMask) return fullMask;
     const off = document.createElement('canvas');
@@ -1928,23 +1930,22 @@
     const octx = off.getContext('2d');
     octx.drawImage(img, 0, 0);
     const data = octx.getImageData(0, 0, natW, natH).data;
-    const gray = new Uint8ClampedArray(natW * natH);
-    const hist = new Array(256).fill(0);
+    const rs = [], gs = [], bs = [];
+    const sample = p => { rs.push(data[p*4]); gs.push(data[p*4+1]); bs.push(data[p*4+2]); };
+    for (let x = 0; x < natW; x++){ sample(x); sample((natH-1)*natW + x); }
+    for (let y = 0; y < natH; y++){ sample(y*natW); sample(y*natW + natW-1); }
+    const median = a => { a.sort((p, q) => p - q); return a[a.length >> 1]; };
+    const br = median(rs), bg = median(gs), bb = median(bs);
+    const ink = new Uint8Array(natW * natH);
     for (let i = 0, p = 0; i < data.length; i += 4, p++){
-      const g = Math.round(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
-      gray[p] = g; hist[g]++;
+      ink[p] = (Math.abs(data[i]-br) > BG_TOLERANCE || Math.abs(data[i+1]-bg) > BG_TOLERANCE ||
+                Math.abs(data[i+2]-bb) > BG_TOLERANCE) ? 1 : 0;
     }
-    const threshold = otsuThreshold(hist, natW*natH);
-    let borderSum = 0, borderCount = 0;
-    for (let x = 0; x < natW; x++){ borderSum += gray[x]; borderSum += gray[(natH-1)*natW + x]; borderCount += 2; }
-    for (let y = 0; y < natH; y++){ borderSum += gray[y*natW]; borderSum += gray[y*natW + (natW-1)]; borderCount += 2; }
-    const bgIsLight = (borderSum/borderCount) > threshold;
-    fullMask = { gray, threshold, bgIsLight, W: natW, H: natH };
+    fullMask = { ink, W: natW, H: natH };
     return fullMask;
   }
   function isInk(mask, x, y){
-    const g = mask.gray[y*mask.W + x];
-    return mask.bgIsLight ? (g < mask.threshold) : (g >= mask.threshold);
+    return mask.ink[y*mask.W + x] === 1;
   }
 
   function floodFillBBox(mask, startX, startY, bx0, by0, bx1, by1, maxVisited){
@@ -2071,19 +2072,28 @@
     return best;
   }
 
+  // Fraction of ink along a row/column segment — but only if it also contains one long
+  // near-continuous run (gaps of up to LINE_GAP px bridged), else 0. A border line or solid
+  // panel fill has that run; a line of caption text (dense enough on its own to pass the
+  // fraction test once the mask counts anti-aliased edges as ink) is broken up by word gaps.
+  const LINE_GAP = 3, LINE_MIN_RUN = 0.35;
+  function lineInkFraction(n, at){
+    let total = 0, best = 0, cur = 0, gap = 0;
+    for (let i = 0; i < n; i++){
+      if (at(i)){ total++; cur += gap + 1; gap = 0; if (cur > best) best = cur; }
+      else if (cur && ++gap > LINE_GAP){ cur = 0; gap = 0; }
+    }
+    return best >= LINE_MIN_RUN * n ? total / n : 0;
+  }
   function rowInkFraction(mask, y, x0, x1){
     x0 = Math.max(0, Math.round(x0)); x1 = Math.min(mask.W, Math.round(x1));
     if (x1 <= x0) return 0;
-    let count = 0;
-    for (let x = x0; x < x1; x++) if (isInk(mask, x, y)) count++;
-    return count / (x1 - x0);
+    return lineInkFraction(x1 - x0, i => isInk(mask, x0 + i, y));
   }
   function colInkFraction(mask, x, y0, y1){
     y0 = Math.max(0, Math.round(y0)); y1 = Math.min(mask.H, Math.round(y1));
     if (y1 <= y0) return 0;
-    let count = 0;
-    for (let y = y0; y < y1; y++) if (isInk(mask, x, y)) count++;
-    return count / (y1 - y0);
+    return lineInkFraction(y1 - y0, i => isInk(mask, x, y0 + i));
   }
 
   // Scans inward from each of the cell's own outer edges for the first strong straight
