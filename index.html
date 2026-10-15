@@ -42,20 +42,24 @@
     <button class="btn ghost sm" id="saveBtn" disabled>Save</button>
     <button class="btn ghost sm" id="assetsBtn" disabled title="asset tracker">Assets</button>
     <div class="menu-wrap">
-      <button class="btn ghost sm" id="exportBtn" disabled title="sheet preview / export">Export ▾</button>
+      <button class="btn ghost sm" id="exportBtn" disabled title="presentation, bidding sheet, edit handoff">Export ▾</button>
       <div class="menu hidden" id="exportMenu">
-        <button id="mMp4">Export mp4 — final…</button>
-        <button id="mMp4Draft">Export mp4 — draft (fast)…</button>
-        <button id="mViewer">Export review viewer…</button>
-        <button id="mFcpxml">Export FCPXML (Resolve / Final Cut)…</button>
-        <button id="mPremiere">Export Premiere Pro XML…</button>
-        <button id="mAfterEffects">Export After Effects (script + media zip)…</button>
-        <div class="menu-sep"></div>
+        <div class="menu-head">Presentation</div>
+        <button id="mMp4">mp4…</button>
+        <button id="mStoryboard">Storyboard sheet…</button>
+        <!-- hidden for now (2026-10-15), still wired in main.js: unhide to bring back -->
+        <button id="mMp4Draft" hidden>mp4 — draft (fast)…</button>
+        <button id="mViewer" hidden>Review viewer…</button>
+        <div class="menu-head">Bidding sheet</div>
+        <button id="mPreview">Preview…</button>
         <button id="mSheetExport" data-only="hornet">Export to Google Sheet…</button>
         <button id="mSheetUpdate" data-only="hornet">Update Google Sheet</button>
-        <button id="mPreview">Preview sheet…</button>
         <button id="mJson" data-only="standalone">Download breakdown JSON</button>
         <button id="mCopyGs" data-only="standalone">Copy Apps Script</button>
+        <div class="menu-head">Edit handoff</div>
+        <button id="mFcpxml">Resolve / Final Cut (FCPXML)…</button>
+        <button id="mPremiere">Premiere Pro (XML)…</button>
+        <button id="mAfterEffects">After Effects (script + media)…</button>
       </div>
     </div>
     <span class="sep"></span>

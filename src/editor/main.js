@@ -14,10 +14,12 @@ import { Transport } from './transport.js';
 import { mutate, undo, redo, clearHistory, canUndo, canRedo, beginGesture, commitGesture, cancelGesture } from '../core/history.js';
 import { APPS_SCRIPT } from '../io/appsScript.js';
 import { openAssetWindow, openPreview, exportBreakdownJSON, exportToGoogleSheet, updateGoogleSheet, chooseSheetDestination, showSheetResult, setRefresh, closeModal, modal } from './assets.js';
-import { openConnect, ensureToken } from '../io/googleSheets.js';
+import { openConnect, ensureToken, createSlidesFromPptx } from '../io/googleSheets.js';
+import { buildStoryboardPptx } from '../io/storyboardPptx.js';
 import { exportMp4 } from '../io/mp4.js';
 import { exportViewer } from '../io/viewer.js';
 import { exportFcpxml, exportPremiereXml, exportAeZip } from '../io/nle.js';
+import { openSheetDialog } from './sheetDialog.js';
 
 const $ = (id) => document.getElementById(id);
 let cur = 0, lastShot = -1, pps = null;
@@ -748,6 +750,7 @@ function wire() {
     try { await exportAeZip((msg) => overlay(msg)); toast('After Effects zip downloaded — unzip, then File › Scripts › Run Script File'); }
     catch (e) { console.error(e); toast(e.message || 'After Effects export failed'); } finally { overlay(false); }
   };
+  $('mStoryboard').onclick = () => { $('exportMenu').classList.add('hidden'); openSheetDialog({ toast, onSlides: slidesExport }); };
   $('autoBtn').onclick = () => { mutate(() => { const r = autoEstimate(P); toast(`Estimated ${r.filled} boards → ${fmtClock(r.total)}`); }); render(); };
   $('rebalBtn').onclick = () => { mutate(() => { const r = rebalance(P); toast(`Rebalanced → ${fmtClock(r.total)}`); }); render(); };
   $('cutBtn').onclick = toggleCut;
@@ -836,6 +839,9 @@ function wire() {
   window.addEventListener('resize', () => { if (P.frames.length) { buildTimeline(); updatePlayhead(transport.sec); layoutAudioClip(); layoutPreview(); } });
 }
 
+// Set by wireGoogleSheets() (Hornet build only): storyboard → new Google Slides deck.
+let slidesExport = null;
+
 // Hornet build: direct Google Sheets export (googleSheets.js) — see CLAUDE.md.
 function wireGoogleSheets() {
   const runSheets = async (task, resultOpts) => {
@@ -896,6 +902,36 @@ function wireGoogleSheets() {
       // awaited first and the browser blocks the popup.
       onPick: () => runSheets((status) => exportToGoogleSheet(openConnect({ mode: 'pick' }), status)),
       onChoice: (choice) => runSheets((status) => exportToGoogleSheet(withToken(choice), status), { autoOpen: !!choice.create }),
+    });
+  };
+  // Storyboard sheet → a new Google Slides deck: the .pptx (one picture + one
+  // editable text box per board) is uploaded and converted by Drive. Runs
+  // from the storyboard dialog's own button, after its settings are saved.
+  slidesExport = async () => {
+    closeModal(false);
+    let res, deck;
+    try {
+      overlay('Connecting to Google…');
+      await ensureToken();
+      deck = await buildStoryboardPptx({ onProgress: (m) => overlay(m) });
+      overlay('Creating Google Slides deck…');
+      res = await createSlidesFromPptx(deck.blob, `${P.baseName} storyboard`);
+    } catch (e) {
+      overlay(false);
+      console.error(e);
+      if (e.message === 'Cancelled.') return;
+      if (e.code === 'popup_blocked') { offerReconnect(slidesExport); return; }
+      toast(e.message || 'Google Slides export failed');
+      return;
+    }
+    overlay(false);
+    modal('Google Slides deck ready', (body) => {
+      const p = document.createElement('p');
+      p.textContent = `Created “${P.baseName} storyboard” in your Drive — ${deck.slides} slide${deck.slides > 1 ? 's' : ''}, ${deck.boards} boards, each with an editable caption box.`;
+      const a = document.createElement('a');
+      a.href = res.url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'btn';
+      a.textContent = 'Open in Google Slides ↗';
+      body.append(p, a);
     });
   };
   $('mSheetUpdate').onclick = () => {

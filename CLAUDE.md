@@ -152,6 +152,8 @@ just `npm install && npm run build` in place. Always run a build before committi
 - `src/io/viewer.js` — builds/export the viewer JSON (thumbnails + timing + annos + audio).
 - `src/io/nle.js` — NLE handoff: FCPXML (Resolve/FCP), FCP7 XML (Premiere), After Effects
   `.jsx` + media zip. Shared `frameCounts()` (whole-frame math) and `audioPlacement()`.
+- `src/io/storyboardSheet.js` + `src/editor/sheetDialog.js` — storyboard sheet PNG export (see Roadmap 9);
+  `src/io/storyboardPptx.js` — the same grid as a .pptx / Google Slides deck.
 - `src/viewer/main.js` + `view.html` — the read-only review player (loads a viewer JSON;
   `?src=<url>` also works).
 - `src/io/googleSheets.js` — Google Sheets export: sign-in handoff, Drive thumbnail uploads, one-batch
@@ -420,16 +422,16 @@ just `npm install && npm run build` in place. Always run a build before committi
 5. **NLE handoff — `src/io/nle.js`, all native imports, no plug-ins.** Images and audio are
    referenced by **bare filename** (the app has no filesystem paths — boards are in-memory
    blobs), except After Effects, which ships the media with it.
-   - **FCPXML 1.9** (`buildFcpxml`) — Export ▾ → "Export FCPXML (Resolve / Final Cut)…".
+   - **FCPXML 1.9** (`buildFcpxml`) — Export ▾ → Edit handoff → "Resolve / Final Cut (FCPXML)…".
      **Verified in Resolve** (user, 2026-10-08) for the video; audio added afterwards as a
      connected clip (`lane="-1"`) on whichever board is on screen when the audio starts —
      a connected clip's `offset` is in its parent's local time, so it's `rec - parent.startFrame`.
      The audio part is not yet confirmed in Resolve.
-   - **Premiere Pro: FCP7 XML / xmeml v4** (`buildPremiereXml`) — "Export Premiere Pro XML…".
+   - **Premiere Pro: FCP7 XML / xmeml v4** (`buildPremiereXml`) — Export ▾ → Edit handoff → "Premiere Pro (XML)…".
      Premiere's own File › Import reads it; media comes in offline → Link Media. **Not validated
      in Premiere** (no Adobe apps on the dev machine) — only well-formed + frame math checked.
-   - **After Effects: ExtendScript** (`buildAeScript`/`exportAeZip`) — "Export After Effects
-     (script + media zip)…". Zip = `<base>_AfterEffects.jsx` + every visible board's full-res
+   - **After Effects: ExtendScript** (`buildAeScript`/`exportAeZip`) — Export ▾ → Edit handoff →
+     "After Effects (script + media)…". Zip = `<base>_AfterEffects.jsx` + every visible board's full-res
      image + the audio. Run via File › Scripts › Run Script File; it finds media next to itself
      (`File($.fileName).parent`), else asks for a folder; builds a comp at `resW×resH`/fps, one
      still layer per board with the board's **fit mode** applied as layer scale (same math as
@@ -464,6 +466,56 @@ just `npm install && npm run build` in place. Always run a build before committi
      the two values, keep `resLock`'s aspect ratio in sync (it's derived from `resW/resH` — see
      `resAspect` in `main.js`), and call `layoutPreview()` same as the existing `resW`/`resH`/
      `resPreset` change handlers already do.
+
+9. **Storyboard sheet export. DONE (2026-10-15)** — Export ▾ → Presentation → "Storyboard sheet…"
+   (one dialog: Export PNG · Download .pptx · Export to Google Slides [Hornet only]).
+   Renders the visible boards (`enabledFlat`, timeline order, auto-numbered 1..n) into one-page
+   grids in Frame Splitter's style — flat background, panel, then number + caption underneath —
+   so an exported page can round-trip back through `public/frame-splitter.html`.
+   - Dialog (`sheetDialog.js`): rows/cols, background color (white default; text color flips for
+     dark backgrounds), caption lines (0–6, longer text is ellipsized), page size 1920×1080 or
+     3840×2160 (16:9 for a Google Slides slide), panel border, annotations, "use shot notes", a
+     live half-res preview with paging, and a per-board caption list.
+   - Panels use the spot aspect (`resW:resH`) and each board's **fit mode via `fitRect`**, clipped
+     to the panel, over black — same framing as preview/mp4. Annotations via `drawAnnos` with the
+     `{x,y,w,h}` mapping.
+   - More boards than rows×cols → multiple pages, downloaded as one zip of `_pNN.png`s; one page →
+     a single PNG.
+   - **State:** `project.boardCaption` (filename → caption; in undo snapshots + work file — caption
+     edits are a focus→blur gesture) and `project.sheetLayout` (the dialog settings; work file
+     only, deliberately NOT in undo snapshots — an export preference, like `sheetsTabId`). Shot
+     notes (`meta.note`) were the only notes the model had, so with "use shot notes" on, a board
+     with no caption of its own shows its shot's note on the shot's first visible board.
+   - Dialog checkboxes: numbers (off also removes the number line's space), panel border,
+     annotations, use shot notes.
+   - **.pptx / Google Slides** (`storyboardPptx.js`): same `layout()` grid, but each board is its
+     own picture with a **live text box** under it. The picture is the **whole source image**
+     (JPEG, long side capped at 2560, annotations baked in) **cropped on the slide via
+     `<a:srcRect>`** to the board's `fitRect` window — so the user can re-adjust the crop in
+     Slides (double-click) instead of getting pre-cropped pixels. Fit modes that leave bars
+     (contain/width/height) get an uncropped picture over a black "Panel" rect that carries the
+     border. The text box under each picture holds
+     (bold number paragraph + caption, or an empty pre-styled paragraph to type into), one 16:9
+     slide per page, background = the chosen color. Hand-rolled minimal OOXML (one master, one
+     blank layout, one theme; font Arial) with jszip — no pptx dependency. Checked to parse with
+     python-pptx; **not yet opened in PowerPoint/Keynote/Slides**.
+   - **Google Slides (Hornet build only)**: `createSlidesFromPptx()` in `googleSheets.js` uploads
+     that .pptx with target mimeType `application/vnd.google-apps.presentation` and **Drive
+     converts it** into a native deck. Conversion needs only `drive.file`, so it reuses the Sheets
+     export's token (`ensureToken()`) — no Slides API, no new scope, no tools-dashboard change.
+     Multipart under 4.5 MB, resumable above (Drive caps multipart at 5 MB). Always creates a NEW
+     deck in My Drive; appending to an existing deck would need the Slides API + `presentations`
+     scope (tools-dashboard `INCREMENTAL_SCOPES`, consent screen, `google-connect.html`'s `SCOPE`).
+     **Not yet tested against a real account.**
+   - Not verified by actually splitting an exported sheet in Frame Splitter yet.
+
+10. **Export menu layout (2026-10-15).** Grouped under non-clickable `.menu-head` section labels:
+    **Presentation** (mp4, Storyboard sheet), **Bidding sheet** (Preview, Export/Update Google
+    Sheet — or the standalone JSON/Apps Script pair), **Edit handoff** (FCPXML, Premiere, AE).
+    Item labels drop the "Export" prefix; the section says what it is. "mp4 — draft" and "Review
+    viewer" are **hidden, not removed** (`hidden` attribute in `index.html`, still wired in
+    `main.js`) — unhide to bring them back. "Bidding sheet" is the user-facing name for what the
+    code calls the breakdown.
 
 ## Things that have bitten us (avoid regressions)
 - **`imgCache` (`main.js`) must be keyed by filename, never by array index.** It caches the

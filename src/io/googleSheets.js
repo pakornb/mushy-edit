@@ -88,8 +88,10 @@ export async function ensureToken() {
     window.location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
     return new Promise(() => {}); // navigating away
   }
-  if (r && r.ok) {
-    const data = await r.json();
+  // Off tools-dashboard (local dev, Vercel) the route can come back 200 with the
+  // app's own index.html (SPA fallback), so only a JSON body with a token counts.
+  const data = r && r.ok && /json/i.test(r.headers.get('Content-Type') || '') ? await r.json().catch(() => null) : null;
+  if (data && data.accessToken) {
     token = data.accessToken;
     tokenExp = Date.now() + (data.expiresIn || 3600) * 1000;
     return { token, expiresIn: data.expiresIn };
@@ -157,6 +159,39 @@ async function api(url, { method = 'GET', json, body, headers = {} } = {}) {
     throw new Error((data && data.error && data.error.message) || `Google API error (HTTP ${res.status})`);
   }
   return data;
+}
+
+// ---------- Google Slides (storyboard sheet) ----------
+// Uploads a .pptx (storyboardPptx.js) and lets Drive convert it into a native
+// Google Slides deck — conversion only needs drive.file, so this reuses the
+// Sheets export's token with no Slides API scope or extra consent. Always
+// creates a new deck in the user's My Drive. Call ensureToken() first.
+export async function createSlidesFromPptx(pptx, name) {
+  const PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  const meta = { name, mimeType: 'application/vnd.google-apps.presentation' };
+  let file;
+  if (pptx.size < 4.5 * 1024 * 1024) {
+    // multipart: one request, but Drive caps it at 5 MB
+    const boundary = 'mushy' + Math.random().toString(36).slice(2);
+    const body = new Blob([
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n`,
+      `--${boundary}\r\nContent-Type: ${PPTX}\r\n\r\n`, pptx, `\r\n--${boundary}--`,
+    ]);
+    file = await api('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+      method: 'POST', body, headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    });
+  } else {
+    // resumable: open a session, then PUT the whole file to its Location
+    const start = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': PPTX },
+      body: JSON.stringify(meta),
+    });
+    const loc = start.ok && start.headers.get('Location');
+    if (!loc) throw new Error(`Couldn’t start the Drive upload (HTTP ${start.status})`);
+    file = await api(loc, { method: 'PUT', body: pptx, headers: { 'Content-Type': PPTX } });
+  }
+  return { id: file.id, url: file.webViewLink || `https://docs.google.com/presentation/d/${file.id}/edit` };
 }
 
 // ---------- Drive thumbnails ----------

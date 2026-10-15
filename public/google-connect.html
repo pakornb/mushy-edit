@@ -180,7 +180,12 @@
         return true;
       }
       if (!r.ok) return false; // not behind tools-dashboard, or a transient error — fall back
-      return r.json().then(function (data) { onToken(data.accessToken, +data.expiresIn); return true; });
+      // local dev / Vercel can answer 200 with an HTML page (SPA fallback) — only a JSON token counts
+      if (!/json/i.test(r.headers.get('Content-Type') || '')) return false;
+      return r.json().then(function (data) {
+        if (!data || !data.accessToken) return false;
+        onToken(data.accessToken, +data.expiresIn); return true;
+      }, function () { return false; });
     }, function () { return false; }); // fetch itself failed (offline, etc.) — fall back
   }
 

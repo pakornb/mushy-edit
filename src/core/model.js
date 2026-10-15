@@ -21,6 +21,10 @@ export const project = {
   annos: new Map(),       // filename -> array of annotation strokes (vector)
   fitMode: 'cover',       // global default: 'cover' | 'contain' | 'width' | 'height'
   boardFit: new Map(),    // filename -> fit override
+  boardCaption: new Map(),// filename -> storyboard-sheet caption text (Export storyboard sheet)
+  // Storyboard-sheet export layout ({rows, cols, bg, captionLines, border, annos, shotNotes}).
+  // Saved in the work file; deliberately NOT in undo snapshots — an export preference, not an edit.
+  sheetLayout: null,
   falloffReach: 3,        // base falloff reach in boards (global; Shift doubles it)
   falloffCurve: 'smooth', // 'linear' | 'easeIn' | 'easeOut' | 'smooth'
   lastRebalanceSpot: null,// spotSeconds value as of the last rebalance/load; drives rebalance's pin-override mode
@@ -498,6 +502,7 @@ export function captureState(p = project) {
     boardDisabled: [...p.boardDisabled], shotDisabled: [...p.shotDisabled],
     pinned: [...p.pinned], annos: [...p.annos.entries()],
     fitMode: p.fitMode, boardFit: [...p.boardFit.entries()],
+    boardCaption: [...p.boardCaption.entries()],
     audio: p.audio ? {
       offsetSec: p.audio.offsetSec, inSec: p.audio.inSec, outSec: p.audio.outSec,
       gain: p.audio.gain, fadeInFrames: p.audio.fadeInFrames, fadeOutFrames: p.audio.fadeOutFrames,
@@ -520,6 +525,7 @@ export function applyState(p, snap) {
   p.pinned = new Set(s.pinned || []);
   p.annos = new Map(s.annos || []);
   p.fitMode = s.fitMode || p.fitMode; p.boardFit = new Map(s.boardFit || []);
+  p.boardCaption = new Map(s.boardCaption || []);
   if (p.audio && s.audio) {
     p.audio.offsetSec = s.audio.offsetSec; p.audio.inSec = s.audio.inSec; p.audio.outSec = s.audio.outSec;
     p.audio.gain = s.audio.gain; p.audio.fadeInFrames = s.audio.fadeInFrames; p.audio.fadeOutFrames = s.audio.fadeOutFrames;
